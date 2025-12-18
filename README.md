@@ -1,7 +1,8 @@
 # Qflow 1.5 - Visual Desktop Automation Tool (可视化桌面自动化工具)
 
 <p align="center">
-  <!-- <img src="demo.png" alt="Qflow Interface" width="800"/> -->
+  <img width="2560" height="1285" alt="demo" src="https://github.com/user-attachments/assets/9156e397-70e3-4da1-a7a4-4250bccbc2d9" />
+
   <br>
   <b>无需编程基础，通过节点拖拽实现强大的桌面自动化流程。</b>
   <br>
@@ -41,7 +42,7 @@
 
 1. **克隆仓库**
    ```bash
-   git clone https://github.com/YourUsername/Qflow.git
+   git clone https://github.com/Qwejay/Qflow.git
    cd Qflow
    ```
 
