@@ -1,4 +1,4 @@
-name: Build and Release
+name: Build and Release Qflow
 
 on:
   push:
@@ -8,181 +8,108 @@ on:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      version_bump:
-        description: 'Version bump type (major, minor, patch)'
-        required: true
-        default: 'patch'
-        type: choice
-        options:
-          - major
-          - minor
-          - patch
 
 jobs:
-  # Test job that runs on all Python versions for PRs and pushes to non-main branches
-  test:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main')
-    strategy:
-      matrix:
-        python-version: [3.8, 3.9, "3.10", 3.11]
+  build-and-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run tests
-        run: |
-          # Placeholder for tests - add actual tests here if available
-          echo "Running tests..."
-
-  # Build job that creates the executable for release
-  build:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    
-    steps:
-      - name: Checkout code
+      # 1. 检出代码库
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # 2. 设置 Python 环境
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"  # Using a single Python version for release builds
+          python-version: '3.10'
 
+      # 3. 安装依赖
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build executable
+      # 4. 使用 PyInstaller 打包应用
+      - name: Build with PyInstaller
         run: |
           pyinstaller --onefile --windowed main.py
-          
+
+      # 5. 上传构建产物作为 Artifact
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
-          name: qflow-executable
+          name: Qflow-executable
           path: dist/main.exe
 
-  # Release job that creates GitHub release and uploads assets
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      # 6. 获取最新 Release 版本号（如果没有则从 1.6.0 开始）
+      - name: Get latest release version
+        id: get_version
+        uses: actions/github-script@v6
         with:
-          fetch-depth: 0
+          script: |
+            const response = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 1, // 只获取最新的 Release
+            });
+            let version;
+            if (response.data.length === 0) {
+              version = '1.6.0'; // 如果没有 Release，从 1.6.0 开始
+            } else {
+              const latestTag = response.data[0].tag_name;
+              const versionMatch = latestTag.match(/^v?(\d+)\.(\d+)\.(\d+)$/);
+              if (!versionMatch) {
+                version = '1.6.0'; // 如果 tag_name 不符合规范，从 1.6.0 开始
+              } else {
+                // 递增版本号（默认递增补丁版本）
+                const major = parseInt(versionMatch[1], 10);
+                const minor = parseInt(versionMatch[2], 10);
+                const patch = parseInt(versionMatch[3], 10) + 1;
+                version = `${major}.${minor}.${patch}`;
+              }
+            }
+            // 使用环境文件设置输出
+            const fs = require('fs');
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v3
-
-      - name: Get latest tag
-        id: get_tag
-        run: |
-          # Get all tags sorted by version number
-          TAGS=$(git tag -l --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' || true)
-          if [ -z "$TAGS" ]; then
-            echo "No existing tags found, starting with v1.5.0"
-            echo "NEW_TAG=v1.5.0" >> $GITHUB_OUTPUT
-            echo "VERSION_BUMP=minor" >> $GITHUB_OUTPUT
-          else
-            LATEST_TAG=$(echo "$TAGS" | head -n1)
-            echo "Latest tag: $LATEST_TAG"
-            
-            # Parse version numbers
-            if [[ $LATEST_TAG == v* ]]; then
-              VERSION_NUM=${LATEST_TAG#v}
-            else
-              VERSION_NUM=$LATEST_TAG
-            fi
-            
-            # Determine version bump type
-            if [ "${{ github.event.inputs.version_bump }}" != "" ]; then
-              VERSION_BUMP="${{ github.event.inputs.version_bump }}"
-            else
-              # Default to patch for regular pushes
-              VERSION_BUMP="patch"
-            fi
-            
-            # Calculate new version
-            IFS='.' read -ra VERSION_PARTS <<< "$VERSION_NUM"
-            MAJOR=${VERSION_PARTS[0]}
-            MINOR=${VERSION_PARTS[1]}
-            PATCH=${VERSION_PARTS[2]}
-            
-            case $VERSION_BUMP in
-              major)
-                NEW_MAJOR=$((MAJOR + 1))
-                NEW_TAG="v${NEW_MAJOR}.0.0"
-                ;;
-              minor)
-                NEW_MINOR=$((MINOR + 1))
-                NEW_TAG="v${MAJOR}.${NEW_MINOR}.0"
-                ;;
-              patch|*)
-                NEW_PATCH=$((PATCH + 1))
-                NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
-                ;;
-            esac
-            
-            echo "NEW_TAG=$NEW_TAG" >> $GITHUB_OUTPUT
-            echo "VERSION_BUMP=$VERSION_BUMP" >> $GITHUB_OUTPUT
-          fi
-
+      # 7. 生成变更日志
       - name: Generate changelog
         id: changelog
         run: |
           # Get commit messages since last tag or from beginning
-          if [ "${{ steps.get_tag.outputs.NEW_TAG }}" != "v1.5.0" ]; then
-            PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD)
-            COMMITS=$(git log --pretty=format:"- %s (%h)" $PREVIOUS_TAG..HEAD)
-          else
-            COMMITS=$(git log --pretty=format:"- %s (%h)" --reverse)
-          fi
+          git log --pretty=format:"- %s (%h)" --reverse > changelog.txt
           
-          CHANGELOG="## What's Changed\n\n$COMMITS\n\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/$PREVIOUS_TAG...${{ steps.get_tag.outputs.NEW_TAG }}"
-          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # Read the changelog content
+          $changelogContent = Get-Content changelog.txt -Raw
+          
+          # Set the changelog as output
+          "changelog<<EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $changelogContent | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        shell: pwsh
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 8. 创建 Release 并上传构建产物
+      - name: Create Release and Upload Asset
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.get_tag.outputs.NEW_TAG }}
-          release_name: Qflow ${{ steps.get_tag.outputs.NEW_TAG }}
-          body: ${{ steps.changelog.outputs.CHANGELOG }}
+          tag_name: v${{ steps.get_version.outputs.version }} # 使用动态生成的版本号
+          name: Qflow v${{ steps.get_version.outputs.version }} # Release 名称
+          body: |
+            ## What's Changed
+            
+            ${{ steps.changelog.outputs.changelog }}
+            
+            **Full Changelog**: https://github.com/${{ github.repository }}/commits/
           draft: false
           prerelease: false
-
-      - name: Upload Release Assets
-        run: |
-          # Upload the executable
-          asset_name="qflow-${{ steps.get_tag.outputs.NEW_TAG }}-windows.exe"
-          cp qflow-executable/main.exe "$asset_name"
-          
-          gh release upload ${{ steps.get_tag.outputs.NEW_TAG }} "$asset_name" \
-            --repo ${{ github.repository }} \
-            --clobber
+          files: |
+            dist/main.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
