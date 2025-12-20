@@ -20,8 +20,10 @@ on:
           - patch
 
 jobs:
-  build:
+  # Test job that runs on all Python versions for PRs and pushes to non-main branches
+  test:
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main')
     strategy:
       matrix:
         python-version: [3.8, 3.9, "3.10", 3.11]
@@ -29,8 +31,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
@@ -41,13 +41,34 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
 
       - name: Run tests
         run: |
           # Placeholder for tests - add actual tests here if available
           echo "Running tests..."
-          
+
+  # Build job that creates the executable for release
+  build:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"  # Using a single Python version for release builds
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
       - name: Build executable
         run: |
           pyinstaller --onefile --windowed main.py
@@ -55,13 +76,14 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
-          name: qflow-executable-${{ matrix.python-version }}
+          name: qflow-executable
           path: dist/main.exe
 
+  # Release job that creates GitHub release and uploads assets
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     
     steps:
       - name: Checkout code
@@ -155,17 +177,12 @@ jobs:
 
       - name: Upload Release Assets
         run: |
-          # Upload all executables
-          for artifact_dir in qflow-executable-*; do
-            if [ -d "$artifact_dir" ]; then
-              python_version=${artifact_dir#qflow-executable-}
-              asset_name="qflow-${{ steps.get_tag.outputs.NEW_TAG }}-$python_version-windows.exe"
-              cp "$artifact_dir/main.exe" "$asset_name"
-              
-              gh release upload ${{ steps.get_tag.outputs.NEW_TAG }} "$asset_name" \
-                --repo ${{ github.repository }} \
-                --clobber
-            fi
-          done
+          # Upload the executable
+          asset_name="qflow-${{ steps.get_tag.outputs.NEW_TAG }}-windows.exe"
+          cp qflow-executable/main.exe "$asset_name"
+          
+          gh release upload ${{ steps.get_tag.outputs.NEW_TAG }} "$asset_name" \
+            --repo ${{ github.repository }} \
+            --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
