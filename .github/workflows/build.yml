@@ -105,8 +105,6 @@ jobs:
             ## Latest Change
             
             ${{ steps.changelog.outputs.changelog }}
-            
-            **Full Changelog**: https://github.com/${{ github.repository }}/commits/
           draft: false
           prerelease: false
           files: |
