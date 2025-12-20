@@ -24,7 +24,7 @@ jobs:
 
       # 2. 设置 Python 环境
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -42,15 +42,16 @@ jobs:
 
       # 5. 上传构建产物作为 Artifact
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Qflow-executable
           path: dist/main.exe
+          retention-days: 5
 
-      # 6. 获取最新 Release 版本号（如果没有则从 1.6.0 开始）
+      # 6. 获取最新 Release 版本号（如果没有则从 1.5.0 开始）
       - name: Get latest release version
         id: get_version
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
             const response = await github.rest.repos.listReleases({
@@ -60,12 +61,12 @@ jobs:
             });
             let version;
             if (response.data.length === 0) {
-              version = '1.6.0'; // 如果没有 Release，从 1.6.0 开始
+              version = '1.5.0'; // 如果没有 Release，从 1.5.0 开始
             } else {
               const latestTag = response.data[0].tag_name;
               const versionMatch = latestTag.match(/^v?(\d+)\.(\d+)\.(\d+)$/);
               if (!versionMatch) {
-                version = '1.6.0'; // 如果 tag_name 不符合规范，从 1.6.0 开始
+                version = '1.5.0'; // 如果 tag_name 不符合规范，从 1.5.0 开始
               } else {
                 // 递增版本号（默认递增补丁版本）
                 const major = parseInt(versionMatch[1], 10);
@@ -97,10 +98,10 @@ jobs:
       # 8. 创建 Release 并上传构建产物
       - name: Create Release and Upload Asset
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.get_version.outputs.version }} # 使用动态生成的版本号
-          name: Qflow v${{ steps.get_version.outputs.version }} # Release 名称
+          tag_name: v${{ steps.get_version.outputs.version }}
+          name: Qflow v${{ steps.get_version.outputs.version }}
           body: |
             ## What's Changed
             
