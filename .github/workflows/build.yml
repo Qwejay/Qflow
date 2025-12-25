@@ -35,7 +35,7 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # 4. 获取最新 Release 版本号（如果没有则从 1.6.0 开始）
+      # 4. 获取最新 Release 版本号（如果没有则从 1.7.0 开始）
       - name: Get latest release version
         id: get_version
         uses: actions/github-script@v7
@@ -48,12 +48,12 @@ jobs:
             });
             let version;
             if (response.data.length === 0) {
-              version = '1.6.0'; // 如果没有 Release，从 1.6.0 开始
+              version = '1.7.0'; // 如果没有 Release，从 1.7.0 开始
             } else {
               const latestTag = response.data[0].tag_name;
               const versionMatch = latestTag.match(/^v?(\d+)\.(\d+)\.(\d+)$/);
               if (!versionMatch) {
-                version = '1.6.0'; // 如果 tag_name 不符合规范，从 1.6.0 开始
+                version = '1.7.0'; // 如果 tag_name 不符合规范，从 1.7.0 开始
               } else {
                 // 递增版本号（默认递增补丁版本）
                 const major = parseInt(versionMatch[1], 10);
