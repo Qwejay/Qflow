@@ -1,4 +1,4 @@
-# Qflow 1.6 - 可视化桌面自动化工具（Desktop Automation Tool）
+# Qflow - 可视化桌面自动化工具（Desktop Automation Tool）
 
 <p align="center">
   <img width="2560" height="1285" alt="demo" src="https://github.com/user-attachments/assets/9156e397-70e3-4da1-a7a4-4250bccbc2d9" />
@@ -16,7 +16,7 @@
 
 ## ✨ 核心功能 (Features)
 
-*   **🎨 可视化编辑器**：支持节点拖拽、无限画布缩放/平移、框选、撤销/重做。
+*   **🎨 可视化编辑器**：支持节点拖拽、无限画布缩放/平移、框选。
 *   **👁️ 视觉感知**：
     *   **图像寻找**：集成 OpenCV，支持模板匹配和特征匹配（SIFT/AKAZE），支持多尺度搜索。
     *   **静止检测**：监控屏幕特定区域是否静止（例如判断加载是否完成）。
