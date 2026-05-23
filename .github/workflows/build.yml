@@ -2,18 +2,13 @@ name: Build and Release Qflow
 
 on:
   push:
-    branches:
-      - main
     tags:
-      - 'v*'     
-      - '[0-9]*' 
-  pull_request:
-    branches:
-      - main
+      - 'v*'
+      - '[0-9]*'
   workflow_dispatch:
     inputs:
       version:
-        description: ''
+        description: '手动构建版本号 (例如: 1.7.0)'
         required: true
         default: '1.7.0'
 
@@ -54,7 +49,6 @@ jobs:
           
           CLEAN_VER=$(echo "$ORIGINAL_VER" | sed -E 's/^[vV]//g')
           
-          # 用于 Windows 的 Nuitka 属性要求，必须为纯数字 X.Y.Z 格式（去除 -dev 等后缀）
           METADATA_VER=$(echo "$CLEAN_VER" | cut -d'-' -f1)
           if [[ ! "$METADATA_VER" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
             METADATA_VER="1.7.0"
@@ -79,9 +73,9 @@ jobs:
             "--output-dir=dist",
             "--clean-cache=all",
             "--remove-output",
-            "--noinclude-unittest-mode=nofollow",    # 已修正为 nofollow
-            "--noinclude-pytest-mode=nofollow",      # 已修正为 nofollow
-            "--noinclude-setuptools-mode=nofollow",  # 已修正为 nofollow
+            "--noinclude-unittest-mode=nofollow",
+            "--noinclude-pytest-mode=nofollow",
+            "--noinclude-setuptools-mode=nofollow",
             "--assume-yes-for-downloads"
           )
           
@@ -92,7 +86,7 @@ jobs:
           
           if (Test-Path "icon.ico") {
             $nuitkaParams += "--windows-icon-from-ico=icon.ico"
-            $nuitkaParams += "--include-data-files=icon.ico=."
+            $nuitkaParams += "--include-data-files=icon.ico=icon.ico"
           }
           
           $nuitkaParams += "main.py"
@@ -129,7 +123,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Qflow ${{ steps.version.outputs.clean_version }} # Release 标题净化显示为 Qflow 1.7.0
+          name: Qflow ${{ steps.version.outputs.clean_version }}
           body: |
             ## Latest Change
             
