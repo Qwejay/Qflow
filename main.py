@@ -23,30 +23,27 @@ import copy
 from datetime import datetime
 from collections import namedtuple
 
-# 尝试导入 pyperclip 用于剪贴板粘贴模式
-try:
-    import pyperclip
-    HAS_PYPERCLIP = True
-except ImportError:
-    HAS_PYPERCLIP = False
-    print("⚠️ 提示: 未安装 pyperclip，键盘'粘贴模式'和剪贴板节点将不可用。")
+__app_name__   = "Qflow"
+__version__    = "1.7.6"
+__author__     = "QwejayHuang"
+__company__    = "QwejayHuang"
+__description__= "可视化节点办公自动化引擎"
 
-# --- 1. 依赖库检查 ---
-try:
-    import cv2
-    import numpy as np
-    HAS_OPENCV = True
-except ImportError:
-    HAS_OPENCV = False
-    print("⚠️ 警告: 未安装 opencv-python，高级图像识别功能受限。")
+# --- 1. 可选依赖库统一检查 ---
+HAS_PYPERCLIP = HAS_OPENCV = HAS_AUDIO = False
+
+try: import pyperclip; HAS_PYPERCLIP = True
+except ImportError: print("⚠️ 提示: 未安装 pyperclip，键盘'粘贴模式'和剪贴板节点将不可用。")
+
+try: import cv2; import numpy as np; HAS_OPENCV = True
+except ImportError: print("⚠️ 警告: 未安装 opencv-python，高级图像识别功能受限。")
 
 try:
+    import comtypes
     from comtypes import CLSCTX_ALL
     from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
-    import comtypes 
     HAS_AUDIO = True
-except ImportError:
-    HAS_AUDIO = False
+except ImportError: print("⚠️ 提示: 未安装 pycaw 或 comtypes，声音检测节点将不可用。")
 
 # --- 2. 系统与配置管理 ---
 pyautogui.FAILSAFE = False
@@ -265,15 +262,18 @@ class WindowEngine:
         pid_map = {}
         hSnap = ctypes.windll.kernel32.CreateToolhelp32Snapshot(WindowEngine.TH32CS_SNAPPROCESS, 0)
         if hSnap == -1: return pid_map
-        pe32 = WindowEngine.PROCESSENTRY32()
-        pe32.dwSize = ctypes.sizeof(WindowEngine.PROCESSENTRY32)
-        if ctypes.windll.kernel32.Process32First(hSnap, ctypes.byref(pe32)):
-            while True:
-                try: exe_name = pe32.szExeFile.decode('gbk', 'ignore')
-                except: exe_name = pe32.szExeFile.decode('utf-8', 'ignore')
-                pid_map[pe32.th32ProcessID] = exe_name
-                if not ctypes.windll.kernel32.Process32Next(hSnap, ctypes.byref(pe32)): break
-        ctypes.windll.kernel32.CloseHandle(hSnap)
+        try:
+            pe32 = WindowEngine.PROCESSENTRY32()
+            pe32.dwSize = ctypes.sizeof(WindowEngine.PROCESSENTRY32)
+            if ctypes.windll.kernel32.Process32First(hSnap, ctypes.byref(pe32)):
+                while True:
+                    try: exe_name = pe32.szExeFile.decode('gbk', 'ignore')
+                    except: exe_name = pe32.szExeFile.decode('utf-8', 'ignore')
+                    pid_map[pe32.th32ProcessID] = exe_name
+                    if not ctypes.windll.kernel32.Process32Next(hSnap, ctypes.byref(pe32)): break
+        finally:
+            # 确保即使遇到解码异常，句柄也一定会被释放
+            ctypes.windll.kernel32.CloseHandle(hSnap)
         return pid_map
 
     @staticmethod
@@ -738,7 +738,7 @@ class AutomationCore:
             use_sound = bool(data.get('use_sound', False))
             duration = safe_int(safe_float(data.get('duration', 2.0)) * 1000)
             self.app.after(0, lambda: VisualTips.show_toast(msg, duration, use_sound))
-            self.log(f"🔔 提示内容: {msg}", "info")  # 将提示结果同时渲染到软件内置执行日志中
+            self.log(f"🔔 提示内容: {msg}", "info")
             return 'out'
 
         if ntype == 'open_app':
@@ -746,13 +746,16 @@ class AutomationCore:
             args = data.get('args', '')
             try:
                 cmd_line = f'"{path}" {args}' if args else f'"{path}"'
-                cwd = os.path.dirname(path) if path else None
+                cwd = os.path.dirname(path)
+                if not cwd or not os.path.exists(cwd): 
+                    cwd = None
                 subprocess.Popen(cmd_line, shell=True, cwd=cwd)
                 self.log(f"🚀 启动: {os.path.basename(path)}", "success")
                 return 'out'
             except Exception as e:
                 self.log(f"❌ 启动失败: {e}", "error")
                 return 'fail'
+
 
         if ntype == 'bind_win':
             title = data.get('title', '')
@@ -1396,8 +1399,10 @@ class FlowEditor(tk.Canvas):
                 if self.history.undo_stack: self.history.undo_stack.pop()
         elif self.drag_data.get("type")=="box_select":
             if self.selection_box:
-                coords = self.coords(self.selection_box); overlapping = self.find_overlapping(*coords)
-                [self.select_node(t[5:], add=True) for item in overlapping for t in self.gettags(item) if t.startswith("node_") and t[5:] in self.nodes]
+                coords = self.coords(self.selection_box)
+                if coords and len(coords) == 4:
+                    overlapping = self.find_overlapping(*coords)
+                    [self.select_node(t[5:], add=True) for item in overlapping for t in self.gettags(item) if t.startswith("node_") and t[5:] in self.nodes]
                 self.delete(self.selection_box); self.selection_box = None
         elif self.drag_data.get("type")=="wire":
             if self.temp_wire: self.delete(self.temp_wire)
@@ -2181,15 +2186,23 @@ class App(tk.Tk):
             self.deiconify()
             
             if (n := self.property_panel.current_node): 
+                # 修复: 保存修改前状态，便于后续 Ctrl+Z 撤销
+                self.editor.history.save_state() 
+                
                 if n.type == 'if_img': 
-                    n.data.setdefault('images', []).append({'id': uuid.uuid4().hex, 'image': img, 'tk_image': ImageUtils.make_thumb(img), 'b64': ImageUtils.img_to_b64(img)})
+                    imgs = n.data.get('images', []).copy() # 拷贝防止直接污染引用
+                    imgs.append({'id': uuid.uuid4().hex, 'image': img, 'tk_image': ImageUtils.make_thumb(img), 'b64': ImageUtils.img_to_b64(img)})
+                    n.update_data('images', imgs, refresh_ui=False)
                 elif n.type == 'if_static':
-                    n.update_data('roi', (x1, y1, x2-x1, y2-y1))
-                    n.data['roi_preview'] = img 
-                    n.data['b64_preview'] = ImageUtils.img_to_b64(img)
+                    n.update_data('roi', (x1, y1, x2-x1, y2-y1), refresh_ui=False)
+                    n.update_data('roi_preview', img, refresh_ui=False)
+                    n.update_data('b64_preview', ImageUtils.img_to_b64(img), refresh_ui=False)
                     n.draw()
                 else: 
-                    n.update_data('image', img); n.update_data('tk_image', ImageUtils.make_thumb(img)); n.update_data('b64', ImageUtils.img_to_b64(img))
+                    n.update_data('image', img, refresh_ui=False)
+                    n.update_data('tk_image', ImageUtils.make_thumb(img), refresh_ui=False)
+                    n.update_data('b64', ImageUtils.img_to_b64(img), refresh_ui=False)
+                    
                 n.draw() 
                 self.property_panel.load_node(n)
             self.log(f"🖼️ 截取成功 ({x1},{y1})", "success")
