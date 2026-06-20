@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import random
 import threading
 import queue
 import traceback
@@ -24,12 +25,12 @@ from datetime import datetime
 from collections import namedtuple
 
 __app_name__   = "Qflow"
-__version__    = "1.7.6"
+__version__    = "2.0.1"
 __author__     = "QwejayHuang"
 __company__    = "QwejayHuang"
 __description__= "可视化节点办公自动化引擎"
 
-HAS_PYPERCLIP = HAS_OPENCV = HAS_AUDIO = False
+HAS_PYPERCLIP = HAS_OPENCV = HAS_AUDIO = HAS_PYSTRAY = False
 
 try: import pyperclip; HAS_PYPERCLIP = True
 except ImportError: print("⚠️ 提示: 未安装 pyperclip，键盘'粘贴模式'和剪贴板节点将不可用。")
@@ -43,6 +44,13 @@ try:
     from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
     HAS_AUDIO = True
 except ImportError: print("⚠️ 提示: 未安装 pycaw 或 comtypes，声音检测节点将不可用。")
+
+try:
+    import pystray
+    from pystray import MenuItem
+    HAS_PYSTRAY = True
+except ImportError:
+    print("⚠️ 提示: 未安装 pystray，系统托盘功能将不可用。可执行 pip install pystray 安装。")
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.05
@@ -120,7 +128,6 @@ FONTS = {
     'log': ('Consolas', int(11 * SCALE_FACTOR)) 
 }
 
-
 SETTINGS = {
     'hotkey_start': '<f9>',
     'hotkey_stop': '<f10>',
@@ -128,12 +135,12 @@ SETTINGS = {
 }
 
 LOG_LEVELS = {
-    'info': {'color': '#64b5f6'},      # 蓝色：普通引导
-    'success': {'color': '#81c784'},   # 绿色：重要操作
-    'warning': {'color': '#ffd54f'},   # 黄色：提示建议
-    'error': {'color': '#e57373'},     # 红色：错误
-    'exec': {'color': '#666666'},      # 灰色：装饰线
-    'paused': {'color': '#fff176'}     # 亮黄：暂停
+    'info': {'color': '#64b5f6'},      
+    'success': {'color': '#81c784'},   
+    'warning': {'color': '#ffd54f'},   
+    'error': {'color': '#e57373'},     
+    'exec': {'color': '#666666'},      
+    'paused': {'color': '#fff176'}     
 }
 NODE_WIDTH = int(200 * SCALE_FACTOR)
 HEADER_HEIGHT = int(28 * SCALE_FACTOR)
@@ -165,7 +172,7 @@ NODE_CONFIG = {
 }
 
 PORT_TRANSLATION = {'out': '继续', 'yes': '是', 'no': '否', 'found': '找到', 'timeout': '超时', 'loop': '循环', 'exit': '退出', 'else': '否则', 'success': '成功', 'fail': '失败'}
-MOUSE_ACTIONS = {'click': '点击', 'move': '移动', 'drag': '拖拽', 'scroll': '滚动', 'double_click': '双击'}
+MOUSE_ACTIONS = {'click': '点击', 'move': '移动', 'drag': '拖拽', 'scroll': '滚动'}
 MOUSE_BUTTONS = {'left': '左键', 'right': '右键', 'middle': '中键'}
 ACTION_MAP = {'click': '单击左键', 'double_click': '双击左键', 'right_click': '单击右键', 'none': '不执行操作'}
 MATCH_STRATEGY_MAP = {'hybrid': '智能混合', 'template': '模板匹配', 'feature': '特征匹配'}
@@ -201,7 +208,6 @@ class KeyboardEngine:
     
     @staticmethod
     def safe_write(text, mode='direct'):
-        """mode: direct(按键模拟), paste(剪贴板粘贴)"""
         if mode == 'paste' and HAS_PYPERCLIP:
             try:
                 old_clip = pyperclip.paste()
@@ -220,12 +226,12 @@ class KeyboardEngine:
                 try:
                     KeyboardEngine._controller.type(char)
                 except:
-                    pyautogui.write(char) # 回退
+                    pyautogui.write(char) 
                 time.sleep(0.005)
 
 class VisualTips:
     @staticmethod
-    def show_toast(message, duration=2000, use_sound=False):
+    def show_toast(message, duration=2000, use_sound=False, position='center'):
         try:
             top = tk.Toplevel()
             top.overrideredirect(True)
@@ -235,8 +241,14 @@ class VisualTips:
             lbl = tk.Label(top, text=message, fg="white", bg="#333333", padx=20, pady=10, font=("Microsoft YaHei", 12, "bold"))
             lbl.pack()
             
+            top.update_idletasks()
+            w, h = top.winfo_reqwidth(), top.winfo_reqheight()
             sw, sh = top.winfo_screenwidth(), top.winfo_screenheight()
-            top.geometry(f"+{sw//2 - 100}+{sh//2 - 50}")
+            
+            if position == 'bottom_right':
+                top.geometry(f"+{sw - w - 20}+{sh - h - 60}")
+            else:
+                top.geometry(f"+{sw//2 - w//2}+{sh//2 - h//2}")
             
             if use_sound:
                 threading.Thread(target=lambda: ctypes.windll.kernel32.Beep(800, 300), daemon=True).start()
@@ -503,7 +515,7 @@ class VisionEngine:
                     dst = cv2.perspectiveTransform(pts, M)
                     x_min, y_min = np.min(dst[:, :, 0]), np.min(dst[:, :, 1])
                     x_max, y_max = np.max(dst[:, :, 0]), np.max(dst[:, :, 1])
-                    return Box(max(0, int(x_min)), max(0, int(y_min)), int(x_max - x_min), int(y_max - y_min)), min(1.0, len(good)/len(kp1)*2.5)
+                    return Box(max(0, int(x_min)), max(0, int(y_min)), int(x_max - x_min), int(y_max - y_min)), min(1.0, len(good) / min_match_count * 0.5 + 0.5)
             return None, 0.0
         except: return None, 0.0
     
@@ -689,7 +701,6 @@ class AutomationCore:
                 self.context = {'window_rect': None, 'window_handle': 0, 'window_offset': (0, 0)}
     
     def _ensure_window_focus(self):
-        """强制聚焦绑定的窗口，确保操作不偏移"""
         if self.context['window_handle']:
             try:
                 WindowEngine.focus_window(self.context['window_handle'])
@@ -712,7 +723,12 @@ class AutomationCore:
         if ntype == 'reroute': return 'out'
         if ntype == 'start': return 'out'
         if ntype == 'end': self.stop_event.set(); return '__STOP__'
-        if ntype == 'wait': return 'out' if self._smart_wait(safe_float(data.get('seconds', 1.0))) else '__STOP__'
+        if ntype == 'wait': 
+            if data.get('delay_type') == 'random':
+                sec = random.uniform(safe_float(data.get('min_seconds', 1.0)), safe_float(data.get('max_seconds', 3.0)))
+            else:
+                sec = safe_float(data.get('seconds', 1.0))
+            return 'out' if self._smart_wait(sec) else '__STOP__'
         
         if ntype == 'notify':
             msg = data.get('msg', '执行到此节点')
@@ -741,7 +757,6 @@ class AutomationCore:
             except Exception as e:
                 self.log(f"❌ 启动失败: {e}", "error")
                 return 'fail'
-
 
         if ntype == 'bind_win':
             title = data.get('title', '')
@@ -903,9 +918,12 @@ class AutomationCore:
                 if auto_scroll:
                      with self.io_lock: 
                          if win_region:
-                            cx = win_region[0] + win_region[2] // 2
-                            cy = win_region[1] + win_region[3] // 2
+                            cx = win_region.left + win_region.width // 2
+                            cy = win_region.top + win_region.height // 2
                             pyautogui.moveTo(cx, cy)
+                         else:
+                            w, h = pyautogui.size()
+                            pyautogui.moveTo(w//2, h//2)
                          pyautogui.scroll(safe_int(data.get('scroll_amount', -500)))
                      time.sleep(0.5)
 
@@ -939,9 +957,6 @@ class AutomationCore:
                     pyautogui.moveTo(start_x_screen, start_y_screen, duration=0.1)
                     pyautogui.dragTo(end_x_screen, end_y_screen, button='left', duration=dur)
                 
-                elif action == 'scroll':
-                     pyautogui.scroll(safe_int(data.get('scroll_amount', -500)))
-
                 else:
                     raw_x, raw_y = safe_int(data.get('x',0)), safe_int(data.get('y',0))
                     if coord_mode == 'relative' and self.context['window_handle']:
@@ -951,61 +966,32 @@ class AutomationCore:
                         target_x = raw_x
                         target_y = raw_y
                     
-                    if action == 'click': 
-                        pyautogui.click(x=target_x, y=target_y, clicks=safe_int(data.get('click_count', 1)), button=data.get('mouse_button', 'left'), duration=dur, interval=0.1)
-                    elif action == 'double_click':
-                        pyautogui.doubleClick(x=target_x, y=target_y, duration=dur, interval=0.1)
+                    if action == 'click' or action == 'double_click': 
+                        clicks = 2 if action == 'double_click' else (2 if str(data.get('click_count', 1)) in ['2', '双击'] else 1)
+                        pyautogui.click(x=target_x, y=target_y, clicks=clicks, button=data.get('mouse_button', 'left'), duration=dur, interval=0.1)
                     elif action == 'move': 
                         pyautogui.moveTo(target_x, target_y, duration=dur)
+                    elif action == 'scroll':
+                        pyautogui.moveTo(target_x, target_y, duration=dur)
+                        pyautogui.scroll(safe_int(data.get('scroll_amount', -500)))
             return 'out'
         
         if ntype == 'keyboard':
             with self.io_lock:
                 if data.get('kb_mode', 'text') == 'text': 
-                    pyautogui.write(data.get('text',''))
+                    if data.get('use_paste', True):
+                        KeyboardEngine.safe_write(data.get('text',''), 'paste')
+                    else:
+                        pyautogui.write(data.get('text',''))
                     if data.get('press_enter', False): 
                         pyautogui.press('enter')
                 else: 
-                    from pynput.keyboard import Controller, Key
-                    kb = Controller()
                     keys = [x.strip().lower() for x in data.get('key_name', 'enter').split('+')]
-            
-                    modifiers = []
-                    main_key = None
-                    for k in keys:
-                        if k in ['alt', 'ctrl', 'shift', 'win']:
-                            modifiers.append(k)
-                        else:
-                            main_key = k
-            
-                    for m in modifiers:
-                        if m == 'alt': kb.press(Key.alt)
-                        elif m == 'ctrl': kb.press(Key.ctrl)
-                        elif m == 'shift': kb.press(Key.shift)
-                        elif m == 'win': kb.press(Key.cmd)
-            
-                    if main_key == 'left': kb.press(Key.left)
-                    elif main_key == 'right': kb.press(Key.right)
-                    elif main_key == 'up': kb.press(Key.up)
-                    elif main_key == 'down': kb.press(Key.down)
-                    elif main_key == 'enter': kb.press(Key.enter)
-                    elif main_key == 'space': kb.press(Key.space)
-                    elif main_key == 'tab': kb.press(Key.tab)
-                    elif main_key == 'escape': kb.press(Key.esc)
-                    else: kb.press(main_key)
-            
-                    if main_key:
-                        if main_key == 'left': kb.release(Key.left)
-                        elif main_key == 'right': kb.release(Key.right)
-                        elif main_key == 'up': kb.release(Key.up)
-                        elif main_key == 'down': kb.release(Key.down)
-                        else: kb.release(main_key)
-            
-                    for m in reversed(modifiers):
-                        if m == 'alt': kb.release(Key.alt)
-                        elif m == 'ctrl': kb.release(Key.ctrl)
-                        elif m == 'shift': kb.release(Key.shift)
-                        elif m == 'win': kb.release(Key.cmd)
+                    keys = ['win' if k == 'win' else k for k in keys]
+                    try:
+                        pyautogui.hotkey(*keys)
+                    except Exception as e:
+                        self.log(f"按键发送失败: {e}", "error")
             return 'out'
         
         if ntype == 'cmd':
@@ -1107,7 +1093,7 @@ class GraphNode:
         self.is_visual_node = self.type in ['image', 'if_img', 'if_static']
         self.is_app_node = self.type == 'open_app'
         self.is_bind_win_node = self.type == 'bind_win'
-        
+
         if not self.is_visual_node and not self.is_app_node and self.type not in ['reroute', 'start', 'end']:
             widgets_h = 35; self.has_widgets = True
             
@@ -1190,10 +1176,12 @@ class GraphNode:
             elif img_display_h > 0:
                 target_img = self.data.get('image') if self.type == 'image' else self.data.get('roi_preview')
                 if target_img and isinstance(target_img, Image.Image): 
-                    disp_w = int(vw - 8*z); disp_h = int((img_display_h - 5) * z); thumb = target_img.copy(); thumb.thumbnail((disp_w, disp_h), Image.Resampling.LANCZOS)
-                    tk_thumb = ImageTk.PhotoImage(thumb); self.data['_tk_cache'] = tk_thumb 
-                    self.canvas.create_rectangle(vx+4*z, img_start_y, vx+vw-4*z, img_start_y+disp_h, fill='#000000', outline=COLORS['wire'], width=1, tags=self.tags)
-                    self.canvas.create_image(vx + vw/2, img_start_y + disp_h/2, image=tk_thumb, anchor='center', tags=self.tags)
+                    disp_w = int(vw - 8*z); disp_h = int((img_display_h - 5) * z); 
+                    if disp_w > 0 and disp_h > 0:
+                        thumb = target_img.copy(); thumb.thumbnail((disp_w, disp_h), Image.Resampling.LANCZOS)
+                        tk_thumb = ImageTk.PhotoImage(thumb); self.data['_tk_cache'] = tk_thumb 
+                        self.canvas.create_rectangle(vx+4*z, img_start_y, vx+vw-4*z, img_start_y+disp_h, fill='#000000', outline=COLORS['wire'], width=1, tags=self.tags)
+                        self.canvas.create_image(vx + vw/2, img_start_y + disp_h/2, image=tk_thumb, anchor='center', tags=self.tags)
 
         if self.is_app_node:
             toolbar_y = vy + (self.widget_offset_y * z); path = self.data.get('path', ''); filename = os.path.basename(path) if path else "未选择程序"
@@ -1307,11 +1295,12 @@ class FlowEditor(tk.Canvas):
             for nid in to_del: self.delete_node(nid)
             self.select_node(None)
     def get_logical_pos(self,event_x,event_y): return self.canvasx(event_x)/self.zoom,self.canvasy(event_y)/self.zoom
+    
     def full_redraw(self,event=None): 
         self.config(bg=COLORS['bg_canvas']); self.delete("all");self._draw_grid(); [n.draw() for n in self.nodes.values()]; self.redraw_links()
 
     def _draw_grid(self):
-        self.delete("grid")
+        self.delete("grid") 
         w,h=self.winfo_width(),self.winfo_height(); x1,y1,x2,y2=self.canvasx(0),self.canvasy(0),self.canvasx(w),self.canvasy(h)
         if (step:=int(GRID_SIZE*self.zoom))<5: return
         start_x,start_y=int(x1//step)*step,int(y1//step)*step
@@ -1382,7 +1371,8 @@ class FlowEditor(tk.Canvas):
             if self.selection_box:
                 coords = self.coords(self.selection_box)
                 if coords and len(coords) == 4:
-                    overlapping = self.find_overlapping(*coords)
+                    x1, y1, x2, y2 = coords
+                    overlapping = self.find_overlapping(min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
                     [self.select_node(t[5:], add=True) for item in overlapping for t in self.gettags(item) if t.startswith("node_") and t[5:] in self.nodes]
                 self.delete(self.selection_box); self.selection_box = None
         elif self.drag_data.get("type")=="wire":
@@ -1445,7 +1435,9 @@ class FlowEditor(tk.Canvas):
     def align_nodes(self, mode):
         if len(self.selected_node_ids) < 2: return
         self.history.save_state(); nodes = [self.nodes[nid] for nid in self.selected_node_ids if nid in self.nodes]
-        if mode == 'left': target = min(n.x for n in nodes); [n.set_pos(target, n.y) for n in nodes]
+        if mode == 'left':
+            target = min(n.x for n in nodes)
+            for n in nodes: n.set_pos(target, n.y)
         self.redraw_links()
 
     def sanitize_data_for_json(self, data):
@@ -1538,9 +1530,15 @@ class PropertyPanel(tk.Frame):
         self.clear(); 
         info_frame = tk.Frame(self.content, bg=COLORS['bg_panel'])
         info_frame.pack(fill='both', expand=True, pady=40)
-        tk.Label(info_frame, text="未选择节点", bg=COLORS['bg_panel'], fg=COLORS['fg_sub'], font=('Microsoft YaHei', 11, 'bold')).pack()
-        tk.Label(info_frame, text="请在画布中点击节点以配置属性", bg=COLORS['bg_panel'], fg=COLORS['fg_sub'], font=('Microsoft YaHei', 9)).pack(pady=5)
+        tk.Label(info_frame, text="欢迎使用 Qflow", bg=COLORS['bg_panel'], fg=COLORS['accent'], font=('Microsoft YaHei', 12, 'bold')).pack(pady=(0, 10))
+        tk.Label(info_frame, text="👈 请在左侧拖拽组件到画布", bg=COLORS['bg_panel'], fg=COLORS['fg_text'], font=('Microsoft YaHei', 10)).pack(pady=5)
+        tk.Label(info_frame, text="🖱️ 点击画布上的节点即可在此设置属性", bg=COLORS['bg_panel'], fg=COLORS['fg_sub'], font=('Microsoft YaHei', 9)).pack(pady=5)
         
+        var_help = tk.Frame(info_frame, bg=COLORS['bg_card'], padx=10, pady=10)
+        var_help.pack(fill='x', pady=20)
+        tk.Label(var_help, text="💡 变量组件怎么用？", bg=COLORS['bg_card'], fg=COLORS['warning'], font=('Microsoft YaHei', 10, 'bold')).pack(anchor='w')
+        tk.Label(var_help, text="1. 【变量设置】可保存临时数据(如 x=100)\n2. 在其他组件的输入框中使用 ${x} 即可提取\n3. 【变量分流】可根据变量的值走不同路径", bg=COLORS['bg_card'], fg=COLORS['fg_text'], font=('Microsoft YaHei', 9), justify='left').pack(anchor='w', pady=5)
+     
     def show_multi_select(self, count): self.clear(); tk.Label(self.content, text=f"选中 {count} 个节点", bg=COLORS['bg_panel'], fg=COLORS['accent']).pack(pady=40)
 
     def load_node(self, node):
@@ -1554,7 +1552,14 @@ class PropertyPanel(tk.Frame):
         
         if ntype != 'reroute': self._input(self.content, "节点名称", '_user_title', data.get('_user_title', node.title_text))
 
-        if ntype == 'wait': self._input(self.content, "等待秒数", 'seconds', data.get('seconds', 1.0), safe_float)
+        if ntype == 'wait': 
+            self._combo(self.content, "延时模式", 'delay_type', ['固定延时', '随机延时'], '随机延时' if data.get('delay_type') == 'random' else '固定延时', lambda e: self._save('delay_type', 'random' if e.widget.get() == '随机延时' else 'fixed', refresh_ui=True))
+            if data.get('delay_type') == 'random':
+                f = tk.Frame(self.content, bg=self.content.cget('bg')); f.pack(fill='x', pady=2)
+                self._compact_input(f, "最小(s)", 'min_seconds', data.get('min_seconds', 1.0), safe_float)
+                self._compact_input(f, "最大(s)", 'max_seconds', data.get('max_seconds', 3.0), safe_float)
+            else:
+                self._input(self.content, "等待秒数", 'seconds', data.get('seconds', 1.0), safe_float)
         elif ntype == 'loop':
              self._chk(self.content, "无限循环", 'infinite', data.get('infinite', True))
              if not data.get('infinite', True): self._input(self.content, "循环次数", 'count', data.get('count', 5), safe_int)
@@ -1617,19 +1622,25 @@ class PropertyPanel(tk.Frame):
                 self._save('mouse_action', val, self.current_node, refresh_ui=True)
 
             curr_action = data.get('mouse_action', 'click')
+            if curr_action == 'double_click': curr_action = 'click'
             self._combo(sec, "动作", 'mouse_action', list(MOUSE_ACTIONS.values()), MOUSE_ACTIONS.get(curr_action, '点击'), on_action_change)
             
             if curr_action == 'click':
                 self._combo(sec, "按键", 'mouse_button', list(MOUSE_BUTTONS.values()), MOUSE_BUTTONS.get(data.get('mouse_button', 'left')), lambda e: self._save('mouse_button', {v:k for k,v in MOUSE_BUTTONS.items()}.get(e.widget.get()), self.current_node, refresh_ui=True))
-                self._combo(sec, "次数", 'click_count', ['单击','双击'], '单击' if str(data.get('click_count',1))=='1' else '双击', lambda e: self._save('click_count', 1 if e.widget.get()=='单击' else 2, self.current_node, refresh_ui=True))
-            elif curr_action == 'double_click':
-                tk.Label(sec, text="ℹ️ 执行左键双击", bg=sec.cget('bg'), fg=COLORS['fg_sub'], font=('Microsoft YaHei', int(9 * SCALE_FACTOR))).pack(anchor='w')
+                curr_clicks = str(data.get('click_count', '1'))
+                disp_clicks = '双击' if curr_clicks in ['2', '双击'] else '单击'
+                self._combo(sec, "次数", 'click_count', ['单击','双击'], disp_clicks, lambda e: self._save('click_count', 1 if e.widget.get()=='单击' else 2, self.current_node, refresh_ui=True))
 
-            if curr_action in ['click', 'move', 'double_click']:
+            if curr_action in ['click', 'move', 'scroll']:
                 coord = tk.Frame(sec, bg=sec.cget('bg')); coord.pack(fill='x', pady=5)
                 self._compact_input(coord, "X", 'x', data.get('x', 0), safe_int)
                 self._compact_input(coord, "Y", 'y', data.get('y', 0), safe_int)
                 self._btn_icon(coord, "📍", self.app.pick_coordinate, width=3)
+                
+            if curr_action == 'scroll':
+                scroll_f = tk.Frame(sec, bg=sec.cget('bg')); scroll_f.pack(fill='x', pady=5)
+                self._input(scroll_f, "滚动量(负数向下)", 'scroll_amount', data.get('scroll_amount', -500), safe_int)
+
             elif curr_action == 'drag':
                 start_coord = tk.Frame(sec, bg=sec.cget('bg')); start_coord.pack(fill='x', pady=5)
                 tk.Label(start_coord, text="起始坐标:", bg=sec.cget('bg'), fg=COLORS['accent'], font=('Microsoft YaHei', int(10 * SCALE_FACTOR))).pack(anchor='w', pady=(5,0))
@@ -1644,10 +1655,6 @@ class PropertyPanel(tk.Frame):
                 self._compact_input(end_input, "Y", 'end_y', data.get('end_y', 0), safe_int)
                 self._btn_icon(end_input, "📍", self.app.pick_end_coordinate, width=3)
             
-            elif curr_action == 'scroll':
-                scroll_f = tk.Frame(sec, bg=sec.cget('bg')); scroll_f.pack(fill='x', pady=5)
-                self._input(scroll_f, "滚动量(负数向下)", 'scroll_amount', data.get('scroll_amount', -500), safe_int)
-
         elif ntype == 'keyboard':
             sec = self._create_section("键盘操作")
             
@@ -1913,7 +1920,6 @@ class PropertyPanel(tk.Frame):
             messagebox.showinfo("测试结果", res_txt)
         self.app.after(0, show_result)
 
-
     def _toggle_static_monitor(self):
         if self.static_monitor_active:
             self.static_monitor_active = False
@@ -1948,7 +1954,7 @@ class PropertyPanel(tk.Frame):
             if self.lbl_monitor_status.winfo_exists():
                 txt = f"{'🟢 静止' if is_static else '🌊 运动'} | {elapsed:.1f}s / {dur}s"
                 color = COLORS['success'] if elapsed >= dur else (COLORS['fg_text'] if is_static else COLORS['warning'])
-                self.app.after(0, lambda t=txt, c=color: self.lbl_monitor_status.config(text=t, fg=c))
+                self.app.after(0, lambda t=txt, c=color: self.lbl_monitor_status.winfo_exists() and self.lbl_monitor_status.config(text=t, fg=c))
             if not is_static: static_start = time.time(); last_frame = curr
             time.sleep(0.1)
         self.static_monitor_active = False
@@ -1963,6 +1969,291 @@ class PropertyPanel(tk.Frame):
             vol = AudioEngine.get_max_audio_peak()
             if vol > 0.001: self.app.log(f"📊 音量峰值: {vol:.4f}", "info")
             time.sleep(0.5)
+
+class ExportWizardDialog(tk.Toplevel):
+    def __init__(self, parent, app, project_data):
+        super().__init__(parent)
+        self.app = app
+        self.project_data = project_data
+        
+        self.title("📦 打包导出向导")
+        self.geometry("560x780")
+        self.config(bg=COLORS['bg_panel'])
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+        
+        self.var_mode = tk.StringVar(value="--hidden-run")
+        self.var_single = tk.BooleanVar(value=True)
+        self.var_icon = tk.StringVar(value="")
+        self.var_show_toast = tk.BooleanVar(value=True)
+        self.var_auto_start = tk.BooleanVar(value=True)
+        self.var_auto_quit = tk.BooleanVar(value=True)
+        
+        x = parent.winfo_rootx() + (parent.winfo_width() - 560) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - 780) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        self._build_ui()
+        
+    def _build_ui(self):
+        header = tk.Frame(self, bg=COLORS['accent'], height=60)
+        header.pack(side='top', fill='x')
+        header.pack_propagate(False)
+        tk.Label(header, text="发布独立自动化应用", bg=COLORS['accent'], fg='white', font=('Microsoft YaHei', 14, 'bold')).pack(side='left', padx=20, pady=15)
+        
+        f_btn = tk.Frame(self, bg=COLORS['bg_sidebar'], height=60)
+        f_btn.pack(side='bottom', fill='x')
+        tk.Button(f_btn, text="📦 选择导出路径并开始打包", command=self._do_export, bg=COLORS['success'], fg='#1a1a1a', font=('Microsoft YaHei', 11, 'bold'), bd=0, padx=20, pady=8, cursor="hand2").pack(side='right', padx=20, pady=10)
+        tk.Button(f_btn, text="取消", command=self.destroy, bg=COLORS['bg_card'], fg='white', bd=0, padx=15, pady=8, cursor="hand2").pack(side='right')
+
+        content = tk.Frame(self, bg=COLORS['bg_panel'], padx=30, pady=10)
+        content.pack(side='top', fill='both', expand=True)
+        
+        f_mode = tk.Frame(content, bg=COLORS['bg_panel'])
+        f_mode.pack(fill='x', pady=(0, 5))
+        tk.Label(f_mode, text="运行模式：", bg=COLORS['bg_panel'], fg=COLORS['accent'], font=('Microsoft YaHei', 10, 'bold')).pack(anchor='w', pady=(0, 5))
+        
+        rb1 = tk.Radiobutton(f_mode, text="👻 无痕静默运行 (推荐)", variable=self.var_mode, value="--hidden-run", bg=COLORS['bg_panel'], fg=COLORS['fg_text'], selectcolor=COLORS['bg_app'], activebackground=COLORS['bg_panel'], activeforeground='white', font=('Microsoft YaHei', 10), cursor="hand2")
+        rb1.pack(anchor='w')
+        tk.Label(f_mode, text="双击后无窗口，将在右下角托盘驻留，适合给终端客户使用。", bg=COLORS['bg_panel'], fg=COLORS['fg_sub'], font=('Microsoft YaHei', 9)).pack(anchor='w', padx=25)
+        
+        rb2 = tk.Radiobutton(f_mode, text="🖥️ 显示控制台界面", variable=self.var_mode, value="--run", bg=COLORS['bg_panel'], fg=COLORS['fg_text'], selectcolor=COLORS['bg_app'], activebackground=COLORS['bg_panel'], activeforeground='white', font=('Microsoft YaHei', 10), cursor="hand2")
+        rb2.pack(anchor='w', pady=(5, 0))
+        
+        f_opt = tk.Frame(content, bg=COLORS['bg_panel'])
+        f_opt.pack(fill='x', pady=5)
+        tk.Checkbutton(f_opt, text="🔒 开启防多开保护 (阻止连续重复双击导致混乱)", variable=self.var_single, bg=COLORS['bg_panel'], fg=COLORS['fg_text'], selectcolor=COLORS['bg_app'], activebackground=COLORS['bg_panel'], activeforeground='white', font=('Microsoft YaHei', 10), cursor="hand2").pack(anchor='w')
+        tk.Checkbutton(f_opt, text="🔔 开启运行时状态悬浮提示（启停时在右下角显示）", variable=self.var_show_toast, bg=COLORS['bg_panel'], fg=COLORS['fg_text'], selectcolor=COLORS['bg_app'], activebackground=COLORS['bg_panel'], activeforeground='white', font=('Microsoft YaHei', 10), cursor="hand2").pack(anchor='w', pady=(2, 0))
+        tk.Checkbutton(f_opt, text="🚀 双击EXE后自动开始执行 (取消则仅常驻后台，等待按快捷键)", variable=self.var_auto_start, bg=COLORS['bg_panel'], fg=COLORS['fg_text'], selectcolor=COLORS['bg_app'], activebackground=COLORS['bg_panel'], activeforeground='white', font=('Microsoft YaHei', 10), cursor="hand2").pack(anchor='w', pady=(2, 0))
+        tk.Checkbutton(f_opt, text="🏁 任务执行完毕后自动完全退出 (如不勾选则会挂起等待再次唤醒)", variable=self.var_auto_quit, bg=COLORS['bg_panel'], fg=COLORS['fg_text'], selectcolor=COLORS['bg_app'], activebackground=COLORS['bg_panel'], activeforeground='white', font=('Microsoft YaHei', 10), cursor="hand2").pack(anchor='w', pady=(2, 0))
+        
+        f_icon = tk.Frame(content, bg=COLORS['bg_panel'])
+        f_icon.pack(fill='x', pady=5)
+        tk.Label(f_icon, text="自定义图标 (.ico)：", bg=COLORS['bg_panel'], fg=COLORS['accent'], font=('Microsoft YaHei', 10, 'bold')).pack(anchor='w', pady=(0, 2))
+        icon_row = tk.Frame(f_icon, bg=COLORS['bg_panel'])
+        icon_row.pack(fill='x')
+        e_icon = tk.Entry(icon_row, textvariable=self.var_icon, bg=COLORS['input_bg'], fg='white', insertbackground='white', font=('Microsoft YaHei', 10))
+        e_icon.pack(side='left', fill='x', expand=True, ipady=3)
+        tk.Button(icon_row, text="浏览...", command=self._pick_icon, bg=COLORS['btn_bg'], fg='white', bd=0, padx=10, cursor="hand2").pack(side='left', padx=(10, 0))
+
+        f_delay = tk.Frame(content, bg=COLORS['bg_panel'])
+        f_delay.pack(fill='x', pady=5)
+        tk.Label(f_delay, text="延时启动(秒)：", bg=COLORS['bg_panel'], fg=COLORS['accent'], font=('Microsoft YaHei', 10, 'bold')).pack(side='left')
+        self.var_delay = tk.IntVar(value=3)
+        tk.Spinbox(f_delay, from_=0, to=60, textvariable=self.var_delay, width=5, bg=COLORS['input_bg'], fg='white', buttonbackground=COLORS['bg_panel']).pack(side='left', padx=5)
+        tk.Label(f_delay, text="（双击运行后留出时间将手离开鼠标或切换窗口）", bg=COLORS['bg_panel'], fg=COLORS['fg_sub'], font=('Microsoft YaHei', 9)).pack(side='left')
+
+        f_hk = tk.Frame(content, bg=COLORS['bg_panel'])
+        f_hk.pack(fill='x', pady=5)
+        tk.Label(f_hk, text="全局快捷键绑定：", bg=COLORS['bg_panel'], fg=COLORS['accent'], font=('Microsoft YaHei', 10, 'bold')).pack(anchor='w', pady=(0, 2))
+        
+        safe_hks = [f"<f{i}>" for i in range(1, 13)] + [f"<ctrl>+<f{i}>" for i in range(1, 13)] + ["<home>", "<end>", "<insert>", "<delete>", "<page up>", "<page down>"]
+        
+        hk_row1 = tk.Frame(f_hk, bg=COLORS['bg_panel'])
+        hk_row1.pack(fill='x', pady=2)
+        tk.Label(hk_row1, text="▶ 启动键:", bg=COLORS['bg_panel'], fg=COLORS['fg_text']).pack(side='left')
+        self.var_hk_start = tk.StringVar(value=SETTINGS.get('hotkey_start', '<f9>'))
+        if self.var_hk_start.get() not in safe_hks: self.var_hk_start.set("<f9>")
+        ttk.Combobox(hk_row1, textvariable=self.var_hk_start, values=safe_hks, state='readonly', width=10).pack(side='left', padx=5)
+        
+        tk.Label(hk_row1, text="⏸ 停止(中止)键:", bg=COLORS['bg_panel'], fg=COLORS['fg_text']).pack(side='left', padx=(10, 0))
+        self.var_hk_stop = tk.StringVar(value=SETTINGS.get('hotkey_stop', '<f10>'))
+        if self.var_hk_stop.get() not in safe_hks: self.var_hk_stop.set("<f10>")
+        ttk.Combobox(hk_row1, textvariable=self.var_hk_stop, values=safe_hks, state='readonly', width=10).pack(side='left', padx=5)
+        
+        hk_row2 = tk.Frame(f_hk, bg=COLORS['bg_panel'])
+        hk_row2.pack(fill='x', pady=5)
+        tk.Label(hk_row2, text="❌ 完全退出键:", bg=COLORS['bg_panel'], fg=COLORS['fg_text']).pack(side='left')
+        self.var_hk_quit = tk.StringVar(value="<ctrl>+<f12>")
+        ttk.Combobox(hk_row2, textvariable=self.var_hk_quit, values=safe_hks, state='readonly', width=10).pack(side='left', padx=5)
+
+        f_warn = tk.Frame(content, bg='#3a2020', padx=10, pady=10)
+        f_warn.pack(fill='x', pady=(5, 0))
+        tk.Label(f_warn, text="⚠️ 防失控机制（全局紧急停止）", bg='#3a2020', fg='#ff6b6b', font=('Microsoft YaHei', 10, 'bold')).pack(anchor='w')
+        tk.Label(f_warn, text="遇到死循环时，随时按【停止键】立刻打断流程；按【完全退出键】或右下角托盘可彻底关闭本程序。", bg='#3a2020', fg='#dcdcdc', font=('Microsoft YaHei', 9), justify='left', wraplength=480).pack(anchor='w', pady=(3, 0))
+
+    def _pick_icon(self):
+        f = filedialog.askopenfilename(filetypes=[("Icon Files", "*.ico")])
+        if f: self.var_icon.set(f)
+
+    def _do_export(self):
+        default_name = "导出自动化项目"
+        if self.app.current_file_path:
+            default_name = os.path.splitext(os.path.basename(self.app.current_file_path))[0]
+            
+        target_exe = filedialog.asksaveasfilename(initialfile=default_name, defaultextension=".exe", filetypes=[("Executable", "*.exe")])
+        if not target_exe: return
+        
+        self.app.log("⏳ 正在准备编译环境...", "info")
+        self.update()
+        
+        import glob
+        csc_paths = glob.glob(r"C:\Windows\Microsoft.NET\Framework\v4.*\csc.exe")
+        if not csc_paths:
+            messagebox.showerror("错误", "未找到系统内置的 C# 编译器 (csc.exe)。\n您的系统可能缺少必要的 .NET Framework。")
+            return
+        csc_path = csc_paths[-1] 
+        
+        if 'metadata' not in self.project_data:
+            self.project_data['metadata'] = {}
+        self.project_data['metadata']['export_settings'] = {
+            'delay': self.var_delay.get(),
+            'hotkey_start': self.var_hk_start.get(),
+            'hotkey_stop': self.var_hk_stop.get(),
+            'hotkey_quit': self.var_hk_quit.get(),
+            'show_toast': self.var_show_toast.get(),
+            'auto_start': self.var_auto_start.get(),
+            'auto_quit': self.var_auto_quit.get()
+        }
+        json_str = json.dumps(self.project_data, ensure_ascii=False)
+        b64_str = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+        
+        exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
+        is_python = not getattr(sys, 'frozen', False)
+        
+        run_arg = self.var_mode.get()
+        uuid_str = uuid.uuid4().hex
+        
+        mutex_code = ""
+        if self.var_single.get():
+            mutex_code = f"""
+            bool createdNew;
+            System.Threading.Mutex mutex = new System.Threading.Mutex(true, "QflowApp_{uuid_str}", out createdNew);
+            if (!createdNew) {{ return; }}
+            """
+
+        cs_code = f"""
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+using System.Windows.Forms;
+using Microsoft.Win32;
+
+class Program {{
+    [STAThread]
+    static void Main(string[] args) {{
+        {mutex_code}
+        try {{
+            string tempFile = Path.Combine(Path.GetTempPath(), "qflow_temp_" + Guid.NewGuid().ToString() + ".qflow");
+            
+            string exeName = "Qflow.exe";
+            string portableEngine = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, exeName);
+            
+            string targetFileName = null;
+            string targetArguments = null;
+            
+            // 1. 便携模式 (同目录免安装运行)
+            if (File.Exists(portableEngine)) {{
+                targetFileName = portableEngine;
+                targetArguments = "\\"" + tempFile + "\\" {run_arg}";
+            }}
+            
+            // 2. 注册表模式 (如果安装过环境则全系统可用)
+            if (targetFileName == null) {{
+                try {{
+                    using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\\Classes\\QflowProject\\shell\\open\\command")) {{
+                        if (key != null) {{
+                            string cmd = key.GetValue("") as string;
+                            if (!string.IsNullOrEmpty(cmd) && cmd.StartsWith("\\"")) {{
+                                int secondQuote = cmd.IndexOf("\\"", 1);
+                                if (secondQuote > 1) {{
+                                    string exePart = cmd.Substring(1, secondQuote - 1);
+                                    string argsPart = cmd.Substring(secondQuote + 1).Trim();
+                                    if (File.Exists(exePart)) {{
+                                        targetFileName = exePart;
+                                        targetArguments = argsPart.Replace("\\"%1\\"", "\\"" + tempFile + "\\"") + " {run_arg}";
+                                    }}
+                                }}
+                            }}
+                        }}
+                    }}
+                }} catch {{}}
+            }}
+            
+            // 3. 绝对路径兜底 (开发者模式)
+            if (targetFileName == null) {{
+                bool isPython = {str(is_python).lower()};
+                string originalExe = @"{exe_path.replace('\\', '\\\\')}";
+                string scriptPath = @"{sys.argv[0].replace('\\', '\\\\')}";
+                
+                if (File.Exists(originalExe)) {{
+                    targetFileName = originalExe;
+                    if (isPython) {{
+                        targetArguments = "\\"" + scriptPath + "\\" \\"" + tempFile + "\\" {run_arg}";
+                    }} else {{
+                        targetArguments = "\\"" + tempFile + "\\" {run_arg}";
+                    }}
+                }}
+            }}
+            
+            // 4. 终极环境校验与降级提示
+            if (targetFileName == null) {{
+                MessageBox.Show("运行失败：未在本机找到 Qflow 自动化引擎！\\n\\n【解决方案】\\n1. 绿色便携版：请将此程序与 Qflow.exe 放在同一个文件夹内运行。\\n2. 独立安装版：请在当前电脑上运行一次 Qflow 主程序完成环境注册。\\n", "缺失运行环境", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }}
+
+            // 写入流程配置
+            string b64 = "{b64_str}";
+            byte[] bytes = Convert.FromBase64String(b64);
+            string jsonContent = Encoding.UTF8.GetString(bytes);
+            File.WriteAllText(tempFile, jsonContent, Encoding.UTF8);
+            
+            // 唤醒核心引擎代为执行
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = targetFileName;
+            psi.Arguments = targetArguments;
+            psi.WindowStyle = ProcessWindowStyle.Hidden;
+            psi.CreateNoWindow = true;
+            psi.UseShellExecute = false;
+            
+            Process p = Process.Start(psi);
+            if (p != null) {{
+                p.WaitForExit();
+            }}
+            try {{ File.Delete(tempFile); }} catch {{}}
+            
+        }} catch (Exception e) {{
+            MessageBox.Show("启动发生异常：\\n" + e.Message, "系统致命错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }}
+    }}
+}}
+"""
+        temp_cs = os.path.join(os.environ.get('TEMP', 'C:\\Temp'), "qflow_launcher.cs")
+        try:
+            with open(temp_cs, "w", encoding="utf-8-sig") as f:
+                f.write(cs_code)
+            
+            cmd_args = [csc_path, "/nologo", "/target:winexe", f"/out:{target_exe}", "/reference:System.Windows.Forms.dll", temp_cs]
+            
+            icon_file = self.var_icon.get().strip()
+            if not icon_file or not os.path.exists(icon_file):
+                if hasattr(sys, '_MEIPASS'):
+                    icon_file = os.path.join(sys._MEIPASS, 'icon2.ico')
+                else:
+                    icon_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon2.ico')
+            
+            if icon_file and os.path.exists(icon_file):
+                cmd_args.append(f"/win32icon:{icon_file}")
+                
+            res = subprocess.run(cmd_args, shell=False, creationflags=subprocess.CREATE_NO_WINDOW, capture_output=True, text=True)
+            
+            if res.returncode == 0 and os.path.exists(target_exe):
+                self.app.log(f"📦 成功打包应用: {os.path.basename(target_exe)}", "success")
+                messagebox.showinfo("打包成功", f"🎉 EXE应用程序打包完成！\n\n已保存至:\n{target_exe}")
+                self.destroy()
+            else:
+                err_msg = res.stdout.strip() if res.stdout else res.stderr.strip()
+                self.app.log(f"❌ 打包失败 (代码:{res.returncode}): {err_msg}", "error")
+                messagebox.showerror("打包失败", f"编译器返回错误:\n{err_msg}")
+        except Exception as e:
+            self.app.log(f"❌ 导出发生异常: {e}", "error")
+            messagebox.showerror("异常", f"导出过程发生未知错误:\n{e}")
+        finally:
+            if os.path.exists(temp_cs):
+                try: os.remove(temp_cs)
+                except: pass
 
 class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, app):
@@ -2024,10 +2315,15 @@ class SettingsDialog(tk.Toplevel):
         COLORS.update(THEMES.get(SETTINGS['theme'], THEMES['Dark'])); self.app.refresh_hotkeys(); self.app.restart_ui(); self.destroy()
 
 class App(tk.Tk):
-    def __init__(self, file_path=None, auto_run=False):
+    def __init__(self, file_path=None, auto_run=False, hidden_run=False):
         super().__init__()
+        
+        self._hidden_run_mode = hidden_run
+        if self._hidden_run_mode:
+            self.withdraw()
+            
         self.current_file_path = None
-        self._auto_run_mode = auto_run
+        self._auto_run_mode = auto_run or hidden_run
         self.geometry("1400x1100")
         try:
             if hasattr(sys, '_MEIPASS'):
@@ -2047,12 +2343,20 @@ class App(tk.Tk):
         
         if file_path and os.path.exists(file_path):
             self.current_file_path = file_path
-            self.after(200, lambda: self._load_initial_file(auto_run))
+            self.after(200, lambda: self._load_initial_file(auto_run or hidden_run))
             
         self.update_title()
         self.after(100, self._poll_log)
         self.after(500, self.show_welcome_guide)
         self.after(1000, self.check_file_association)
+
+    def deiconify(self):
+        if getattr(self, '_hidden_run_mode', False): return
+        super().deiconify()
+
+    def iconify(self):
+        if getattr(self, '_hidden_run_mode', False): return
+        super().iconify()
 
     def is_file_associated(self):
         import winreg
@@ -2125,15 +2429,70 @@ class App(tk.Tk):
 
     def _load_initial_file(self, auto_run):
         try:
-            with open(self.current_file_path, 'r', encoding='utf-8') as fp:
+            with open(self.current_file_path, 'r', encoding='utf-8-sig') as fp:
                 self.editor.load_data(json.load(fp))
             self.update_title()
             self.log(f"📂 已加载项目: {self.current_file_path}", "success")
             if auto_run:
-                self.log("🚀 检测到运行参数，即将自动启动...", "info")
-                self.after(500, lambda: self.toggle_run(None))
+                settings = self.editor.get_data().get('metadata', {}).get('export_settings', {})
+                try: delay = int(settings.get('delay', 0))
+                except: delay = 0
+                hk_start = settings.get('hotkey_start')
+                hk_stop = settings.get('hotkey_stop')
+                hk_quit = settings.get('hotkey_quit')
+                auto_start = settings.get('auto_start', True)
+                self._auto_quit = settings.get('auto_quit', True)
+                self._show_export_toast = settings.get('show_toast', True)
+                
+                if hk_start: SETTINGS['hotkey_start'] = hk_start
+                if hk_stop: SETTINGS['hotkey_stop'] = hk_stop
+                if hk_quit: SETTINGS['hotkey_quit'] = hk_quit
+                self.refresh_hotkeys()
+                
+                self.setup_tray()
+                
+                if auto_start:
+                    if delay > 0:
+                        self.log(f"⏳ 延时 {delay} 秒后启动...", "info")
+                        if self._show_export_toast:
+                            VisualTips.show_toast(f"⏳ 准备就绪，延时 {delay} 秒后开始执行...", duration=max(2000, delay * 1000 - 500), position='bottom_right')
+                        self.after(delay * 1000, lambda: self.toggle_run(None))
+                    else:
+                        self.log("🚀 检测到运行参数，即将自动启动...", "info")
+                        self.after(500, lambda: self.toggle_run(None))
+                else:
+                    self.log("🟢 程序已挂起待命", "info")
+                    if self._show_export_toast:
+                        VisualTips.show_toast(f"🟢 程序已在后台待命，请按 {hk_start} 开始执行", duration=2500, position='bottom_right')
         except Exception as e:
             self.log(f"❌ 加载文件失败: {e}", "error")
+            if getattr(self, '_hidden_run_mode', False):
+                self.quit_app()
+
+    def setup_tray(self):
+        if not HAS_PYSTRAY: return
+        if hasattr(self, 'tray_icon') and self.tray_icon: return 
+        try:
+            if hasattr(sys, '_MEIPASS'): icon_path = os.path.join(sys._MEIPASS, 'icon.ico')
+            else: icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon.ico')
+            if os.path.exists(icon_path): image = Image.open(icon_path)
+            else: image = Image.new('RGB', (64, 64), color=(30, 30, 30))
+            
+            menu = (
+                MenuItem('▶ 启动任务', lambda: self.after(0, lambda: self.toggle_run(None))),
+                MenuItem('⏹ 停止任务', lambda: self.after(0, self.core.stop)),
+                MenuItem('❌ 完全退出', lambda: self.after(0, self.quit_app))
+            )
+            self.tray_icon = pystray.Icon("Qflow", image, "Qflow 自动化", menu)
+            threading.Thread(target=self.tray_icon.run, daemon=True).start()
+        except Exception as e:
+            self.log(f"托盘初始化失败: {e}", "error")
+
+    def quit_app(self):
+        if hasattr(self, 'tray_icon'):
+            try: self.tray_icon.stop()
+            except: pass
+        os._exit(0)
 
     def update_title(self):
         filename = os.path.basename(self.current_file_path) if self.current_file_path else "未命名"
@@ -2156,7 +2515,7 @@ class App(tk.Tk):
         tk.Label(title_bar, text=app_name.upper(), font=('Impact', 24), bg=COLORS['bg_app'], fg=COLORS['accent']).pack(side='left', padx=(0, 20))
         
         ops = tk.Frame(title_bar, bg=COLORS['bg_app']); ops.pack(side='left')
-        for txt, cmd in [("📂 打开", self.load), ("💾 保存", self.save), ("📝 另存", self.save_as), ("📦 导出EXE", self.export_exe), ("🗑️ 清空", self.clear), ("⚙️ 设置", self.open_settings)]:
+        for txt, cmd in [("📂 打开", self.load), ("💾 保存", self.save), ("📝 另存", self.save_as), ("📦 打包发布", self.export_exe), ("🗑️ 清空", self.clear), ("⚙️ 设置", self.open_settings)]:
             tk.Button(ops, text=txt, command=cmd, bg=COLORS['bg_header'], fg='white', bd=0, padx=10, cursor='hand2', font=('Microsoft YaHei', 9)).pack(side='left', padx=2)
             
         self.btn_run = tk.Button(title_bar, text="▶ 启动", command=lambda: self.toggle_run(None), bg=COLORS['success'], fg='#1f1f1f', font=('Microsoft YaHei', 11, 'bold'), padx=15, bd=0, cursor='hand2'); self.btn_run.pack(side='right')
@@ -2374,103 +2733,70 @@ class App(tk.Tk):
         top.bind("<Escape>", lambda ev: [top.destroy(), self.deiconify()])
 
     def export_exe(self):
-        project_data = self.editor.get_data()
-        json_str = json.dumps(project_data, ensure_ascii=False)
-        b64_str = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
-        
-        target_exe = filedialog.asksaveasfilename(defaultextension=".exe", filetypes=[("Executable", "*.exe")])
-        if not target_exe: return
-        
-        import glob
-        csc_paths = glob.glob(r"C:\Windows\Microsoft.NET\Framework\v4.*\csc.exe")
-        if not csc_paths:
-            messagebox.showerror("错误", "未找到系统内置的 C# 编译器，无法生成 EXE。")
-            return
-        csc_path = csc_paths[-1] 
-        
-        exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
-        is_python = not getattr(sys, 'frozen', False)
-        
-        cs_code = f"""
-using System;
-using System.Diagnostics;
-using System.IO;
-using System.Text;
-
-class Program {{
-    static void Main(string[] args) {{
-        try {{
-            string b64 = "{b64_str}";
-            byte[] bytes = Convert.FromBase64String(b64);
-            string jsonContent = Encoding.UTF8.GetString(bytes);
-            string tempFile = Path.Combine(Path.GetTempPath(), "qflow_temp_" + Guid.NewGuid().ToString() + ".qflow");
-            File.WriteAllText(tempFile, jsonContent, Encoding.UTF8);
-            
-            ProcessStartInfo psi = new ProcessStartInfo();
-"""
-        if is_python:
-            cs_code += f"""
-            psi.FileName = "pythonw";
-            psi.Arguments = "\\"{exe_path}\\" \\"" + tempFile + "\\" --run";
-"""
-        else:
-            cs_code += f"""
-            psi.FileName = @"{exe_path}";
-            psi.Arguments = "\\"" + tempFile + "\\" --run";
-"""
-            
-        cs_code += """
-            psi.WindowStyle = ProcessWindowStyle.Hidden;
-            psi.CreateNoWindow = true;
-            psi.UseShellExecute = false;
-            Process.Start(psi);
-        } catch (Exception e) {
-            Console.WriteLine(e.Message);
-        }
-    }
-}
-"""
-        temp_cs = os.path.join(os.environ.get('TEMP', 'C:\\Temp'), "qflow_launcher.cs")
-        try:
-            with open(temp_cs, "w", encoding="utf-8-sig") as f:
-                f.write(cs_code)
-            
-            cmd = f'"{csc_path}" /nologo /target:winexe /out:"{target_exe}" "{temp_cs}"'
-            subprocess.run(cmd, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            
-            if os.path.exists(target_exe):
-                self.log(f"📦 成功导出无界面的可执行文件: {target_exe}", "success")
-            else:
-                self.log("❌ 导出EXE失败，可能是安全软件拦截或权限不足", "error")
-        except Exception as e:
-            self.log(f"❌ 导出EXE发生异常: {e}", "error")
-        finally:
-            if os.path.exists(temp_cs):
-                try: os.remove(temp_cs)
-                except: pass
+        ExportWizardDialog(self, self, self.editor.get_data())
 
     def refresh_hotkeys(self):
         if self.hotkey_listener: self.hotkey_listener.stop()
         try:
-            self.hotkey_listener = keyboard.GlobalHotKeys({SETTINGS['hotkey_start']: self.on_hotkey_start, SETTINGS['hotkey_stop']: self.on_hotkey_stop})
+            mapping = {SETTINGS['hotkey_start']: self.on_hotkey_start, SETTINGS['hotkey_stop']: self.on_hotkey_stop}
+            if SETTINGS.get('hotkey_quit'): mapping[SETTINGS['hotkey_quit']] = self.on_hotkey_quit
+            self.hotkey_listener = keyboard.GlobalHotKeys(mapping)
             self.hotkey_listener.start()
         except Exception: pass
     def stop_hotkeys(self):
         if self.hotkey_listener: self.hotkey_listener.stop(); self.hotkey_listener = None
     def on_hotkey_start(self):
         if not self.core.running: self.log("⌨️ 快捷键启动", "info"); self.after(0, lambda: self.toggle_run(None))
+    
     def on_hotkey_stop(self):
-        if self.core.running: self.log("⌨️ 快捷键停止", "warning"); self.core.stop()
+        if self.core.running: 
+            self.log("⌨️ 快捷键停止", "warning")
+            if getattr(self, '_auto_run_mode', False) or getattr(self, '_hidden_run_mode', False):
+                if getattr(self, '_show_export_toast', True):
+                    VisualTips.show_toast("🛑 紧急刹车！当前任务流程已强行打断。", duration=1500, use_sound=True, position='bottom_right')
+            self.core.stop()
+
+    def on_hotkey_quit(self):
+        if getattr(self, '_show_export_toast', True):
+            VisualTips.show_toast("❌ 正在完全退出程序...", duration=1000, position='bottom_right')
+        time.sleep(1)
+        self.quit_app()
+
     def open_settings(self): SettingsDialog(self, self)
     def restart_ui(self): data = self.editor.get_data(); self._setup_ui(); self.editor.load_data(data)
 
     def toggle_run(self, start_id): 
         self.editor.focus_set()
         if self.core.running: self.core.stop()
-        else: self.btn_run.config(text="⏹ 停止", bg=COLORS['danger']); self.btn_pause.config(state='normal', text="⏸ 暂停", bg=COLORS['warning']); self.core.load_project(self.editor.get_data()); self.core.start(start_id)
+        else: 
+            self.btn_run.config(text="⏹ 停止", bg=COLORS['danger'])
+            self.btn_pause.config(state='normal', text="⏸ 暂停", bg=COLORS['warning'])
+            self.core.load_project(self.editor.get_data())
+            if getattr(self, '_auto_run_mode', False) or getattr(self, '_hidden_run_mode', False):
+                if getattr(self, '_show_export_toast', True):
+                    VisualTips.show_toast("▶ 自动化任务开始执行", duration=2000, position='bottom_right')
+            self.core.start(start_id)
+            
     def toggle_pause(self): (self.core.resume() if self.core.paused else self.core.pause())
     def update_debug_btn_state(self, paused): self.btn_pause.config(text="▶ 继续" if paused else "⏸ 暂停", bg=COLORS['success'] if paused else COLORS['warning'])
-    def reset_ui_state(self): self.core.running=False; self.btn_run.config(text="▶ 启动", bg=COLORS['success']); self.btn_pause.config(text="⏸ 暂停", bg=COLORS['warning'], state='disabled'); [self.highlight_node_safe(n, None) for n in self.editor.nodes]
+    
+    def reset_ui_state(self): 
+        if getattr(self, '_hidden_run_mode', False) or getattr(self, '_auto_run_mode', False):
+            if getattr(self, '_auto_quit', True):
+                if getattr(self, '_show_export_toast', True):
+                    VisualTips.show_toast("🏁 任务执行完毕，即将完全退出", duration=1500, position='bottom_right')
+                self.after(1500, self.quit_app)
+            else:
+                if getattr(self, '_show_export_toast', True):
+                    VisualTips.show_toast("🏁 任务已结束，挂起后台待命", duration=1500, position='bottom_right')
+                self.core.running = False
+            return
+            
+        self.core.running=False
+        self.btn_run.config(text="▶ 启动", bg=COLORS['success'])
+        self.btn_pause.config(text="⏸ 暂停", bg=COLORS['warning'], state='disabled')
+        [self.highlight_node_safe(n, None) for n in self.editor.nodes]
+        
     def log(self,msg, level='info'): self.log_q.put((msg, level))
     def _poll_log(self):
         while not self.log_q.empty(): item = self.log_q.get(); self.log_panel.add_log(item[0], item[1])
@@ -2505,7 +2831,7 @@ class Program {{
     def load(self):
         if (f:=filedialog.askopenfilename(filetypes=[("Qflow", "*.qflow"), ("All", "*.*")])): 
             try:
-                with open(f, 'r', encoding='utf-8') as fp: 
+                with open(f, 'r', encoding='utf-8-sig') as fp: 
                     self.editor.load_data(json.load(fp))
                 self.current_file_path = f
                 self.update_title()
@@ -2531,12 +2857,15 @@ if __name__ == "__main__":
     import sys
     file_to_load = None
     auto_run = False
+    hidden_run = False
     
     for arg in sys.argv[1:]:
         if arg.endswith('.qflow'):
             file_to_load = arg
         elif arg == '--run':
             auto_run = True
+        elif arg == '--hidden-run':
+            hidden_run = True
 
-    app = App(file_path=file_to_load, auto_run=auto_run)
+    app = App(file_path=file_to_load, auto_run=auto_run, hidden_run=hidden_run)
     app.mainloop()

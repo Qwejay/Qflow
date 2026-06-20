@@ -8,3 +8,4 @@ pycaw>=20210710
 comtypes>=1.1.10
 PyInstaller
 pyperclip
+pystray
