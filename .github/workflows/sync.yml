@@ -11,9 +11,10 @@ on:
 env:
   REPO_NAME: ${{ github.event.repository.name }}  # 自动获取当前仓库名
   GITHUB_USER: ${{ github.repository_owner }}     # 自动获取当前用户名
-  GITEE_USER: ${{ github.repository_owner }}      # 默认与 GitHub 相同
-  GITLAB_USER: ${{ github.repository_owner }}     # 默认与 GitHub 相同
-  GITCODE_USER: ${{ github.repository_owner }}    # 默认与 GitHub 相同
+  # 统一使用 oauth2 认证，完美避免平台用户名大小写不一致导致的 403 错误
+  GITEE_USER: "oauth2"                            
+  GITLAB_USER: "oauth2"                           
+  GITCODE_USER: "oauth2"                          
 # ====================================================
 
 jobs:
@@ -28,7 +29,7 @@ jobs:
 
       # 2. 同步到 Gitee
       - name: Mirror to Gitee
-        continue-on-error: true
+        continue-on-error: true # 即使失败，也继续后面的步骤
         run: |
           echo "==== 开始同步 Gitee ===="
           # 自动创建 Gitee 仓库
@@ -36,15 +37,15 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"access_token":"${{ secrets.GITEE_TOKEN }}","name":"${{ env.REPO_NAME }}","private":false,"auto_init":false}' > /dev/null || true
           
-          # 推送代码
-          git remote add gitee https://${{ env.GITEE_USER }}:${{ secrets.GITEE_TOKEN }}@gitee.com/${{ env.GITEE_USER }}/${{ env.REPO_NAME }}.git || true
+          # 使用 oauth2 账号推送代码，完美解决大小写问题
+          git remote add gitee https://${{ env.GITEE_USER }}:${{ secrets.GITEE_TOKEN }}@gitee.com/Qwejay/${{ env.REPO_NAME }}.git || true
           git push --force gitee refs/heads/*:refs/heads/*
           git push --force --tags gitee
           echo "==== Gitee 同步步骤结束 ===="
 
       # 3. 同步到 GitLab
       - name: Mirror to GitLab
-        continue-on-error: true
+        continue-on-error: true # 即使失败，也继续后面的步骤
         run: |
           echo "==== 开始同步 GitLab ===="
           # 自动创建 GitLab 仓库
@@ -54,14 +55,14 @@ jobs:
             -d '{"name":"${{ env.REPO_NAME }}","visibility":"public","initialize_with_readme":false}' > /dev/null || true
           
           # 推送代码
-          git remote add gitlab https://oauth2:${{ secrets.GITLAB_TOKEN }}@gitlab.com/${{ env.GITLAB_USER }}/${{ env.REPO_NAME }}.git || true
+          git remote add gitlab https://${{ env.GITLAB_USER }}:${{ secrets.GITLAB_TOKEN }}@gitlab.com/Qwejay/${{ env.REPO_NAME }}.git || true
           git push --force gitlab refs/heads/*:refs/heads/*
           git push --force --tags gitlab
           echo "==== GitLab 同步步骤结束 ===="
 
       # 4. 同步到 GitCode
       - name: Mirror to GitCode
-        continue-on-error: true
+        continue-on-error: true # 即使失败，也继续后面的步骤
         run: |
           echo "==== 开始同步 GitCode ===="
           # 自动创建 GitCode 仓库
@@ -71,7 +72,7 @@ jobs:
             -d '{"name":"${{ env.REPO_NAME }}","visibility":"public","initialize_with_readme":false}' > /dev/null || true
           
           # 推送代码
-          git remote add gitcode https://oauth2:${{ secrets.GITCODE_TOKEN }}@gitcode.com/${{ env.GITCODE_USER }}/${{ env.REPO_NAME }}.git || true
+          git remote add gitcode https://oauth2:${{ secrets.GITCODE_TOKEN }}@gitcode.com/Qwejay/${{ env.REPO_NAME }}.git || true
           git push --force gitcode refs/heads/*:refs/heads/*
           git push --force --tags gitcode
           echo "==== GitCode 同步步骤结束 ===="
