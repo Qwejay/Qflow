@@ -1,0 +1,68 @@
+name: Multi-Platform Sync Hub
+
+on:
+  push:
+    branches:
+      - main # 触发分支
+  workflow_dispatch: # 允许手动点击按钮触发
+  schedule:
+    - cron: '0 18 * * *' # 每天凌晨 2 点自动运行一次
+
+# ==================== 统一配置区域 ====================
+env:
+  REPO_NAME: "Qflow"               # 示例: "my-project"
+  GITHUB_USER: "Qwejay"            # 您的 GitHub 用户名
+  GITEE_USER: "Qwejay"             # 您的 Gitee 用户名
+  GITLAB_USER: "Qwejay"            # 您的 GitLab 用户名
+  GITCODE_USER: "Qwejay"           # 您的 GitCode 用户名
+# ====================================================
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. 检出 GitHub 仓库代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. 同步到 Gitee（使用 Yikun/hub-mirror-action）
+      - name: Mirror to Gitee
+        uses: Yikun/hub-mirror-action@master
+        with:
+          src: "github/${{ env.GITHUB_USER }}"
+          dst: "gitee/${{ env.GITEE_USER }}"
+          dst_token: ${{ secrets.GITEE_TOKEN }}
+          static_list: "${{ env.REPO_NAME }}"
+          force_update: true
+          account_type: user
+          clone_style: "https"
+
+      # 3. 同步到 GitLab（含自动创建）
+      - name: Mirror to GitLab
+        run: |
+          # 自动创建 GitLab 仓库
+          curl -X POST "https://gitlab.com/api/v4/projects" \
+            -H "PRIVATE-TOKEN: ${{ secrets.GITLAB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"name":"${{ env.REPO_NAME }}","visibility":"public","initialize_with_readme":false}' || true
+          
+          # 推送代码
+          git remote add gitlab https://oauth2:${{ secrets.GITLAB_TOKEN }}@gitlab.com/${{ env.GITLAB_USER }}/${{ env.REPO_NAME }}.git
+          git push --force gitlab refs/heads/*:refs/heads/*
+          git push --force --tags gitlab
+
+      # 4. 同步到 GitCode（含自动创建）
+      - name: Mirror to GitCode
+        run: |
+          # GitCode 的 API 与 GitLab 兼容，自动创建 GitCode 仓库
+          curl -X POST "https://gitcode.com/api/v4/projects" \
+            -H "PRIVATE-TOKEN: ${{ secrets.GITCODE_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"name":"${{ env.REPO_NAME }}","visibility":"public","initialize_with_readme":false}' || true
+          
+          # 推送代码
+          git remote add gitcode https://oauth2:${{ secrets.GITCODE_TOKEN }}@gitcode.com/${{ env.GITCODE_USER }}/${{ env.REPO_NAME }}.git
+          git push --force gitcode refs/heads/*:refs/heads/*
+          git push --force --tags gitcode
