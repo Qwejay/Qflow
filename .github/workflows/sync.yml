@@ -1,33 +1,33 @@
-name: Multi-Platform Sync Hub
+name: Zero-Config Multi-Platform Sync
 
 on:
   push:
     branches:
-      - main # 触发分支
-  workflow_dispatch: # 允许手动点击按钮触发
-  schedule:
-    - cron: '0 18 * * *' # 每天凌晨 2 点自动运行一次
+      - main
+      - master
+  workflow_dispatch:
 
-# ==================== 统一配置区域 ====================
+# ==================== 智能变量区域 ====================
+# 这里使用 GitHub 系统的内置变量，自动获取当前仓库名和用户名
 env:
-  REPO_NAME: "Qflow"               # 示例: "my-project"
-  GITHUB_USER: "Qwejay"            # 您的 GitHub 用户名
-  GITEE_USER: "Qwejay"             # 您的 Gitee 用户名
-  GITLAB_USER: "Qwejay"            # 您的 GitLab 用户名
-  GITCODE_USER: "Qwejay"           # 您的 GitCode 用户名
+  REPO_NAME: ${{ github.event.repository.name }}  # 自动获取当前仓库名
+  GITHUB_USER: ${{ github.repository_owner }}     # 自动获取当前用户名
+  GITEE_USER: ${{ github.repository_owner }}      # 默认与 GitHub 相同
+  GITLAB_USER: ${{ github.repository_owner }}     # 默认与 GitHub 相同
+  GITCODE_USER: ${{ github.repository_owner }}    # 默认与 GitHub 相同
 # ====================================================
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      # 1. 检出 GitHub 仓库代码
+      # 1. 下载代码
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2. 同步到 Gitee（使用 Yikun/hub-mirror-action）
+      # 2. 同步到 Gitee
       - name: Mirror to Gitee
         uses: Yikun/hub-mirror-action@master
         with:
@@ -39,30 +39,30 @@ jobs:
           account_type: user
           clone_style: "https"
 
-      # 3. 同步到 GitLab（含自动创建）
+      # 3. 同步到 GitLab
       - name: Mirror to GitLab
         run: |
           # 自动创建 GitLab 仓库
-          curl -X POST "https://gitlab.com/api/v4/projects" \
+          curl -s -X POST "https://gitlab.com/api/v4/projects" \
             -H "PRIVATE-TOKEN: ${{ secrets.GITLAB_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d '{"name":"${{ env.REPO_NAME }}","visibility":"public","initialize_with_readme":false}' || true
+            -d '{"name":"${{ env.REPO_NAME }}","visibility":"public","initialize_with_readme":false}' > /dev/null || true
           
           # 推送代码
-          git remote add gitlab https://oauth2:${{ secrets.GITLAB_TOKEN }}@gitlab.com/${{ env.GITLAB_USER }}/${{ env.REPO_NAME }}.git
+          git remote add gitlab https://oauth2:${{ secrets.GITLAB_TOKEN }}@gitlab.com/${{ env.GITLAB_USER }}/${{ env.REPO_NAME }} || true
           git push --force gitlab refs/heads/*:refs/heads/*
           git push --force --tags gitlab
 
-      # 4. 同步到 GitCode（含自动创建）
+      # 4. 同步到 GitCode
       - name: Mirror to GitCode
         run: |
-          # GitCode 的 API 与 GitLab 兼容，自动创建 GitCode 仓库
-          curl -X POST "https://gitcode.com/api/v4/projects" \
+          # 自动创建 GitCode 仓库
+          curl -s -X POST "https://gitcode.com/api/v4/projects" \
             -H "PRIVATE-TOKEN: ${{ secrets.GITCODE_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d '{"name":"${{ env.REPO_NAME }}","visibility":"public","initialize_with_readme":false}' || true
+            -d '{"name":"${{ env.REPO_NAME }}","visibility":"public","initialize_with_readme":false}' > /dev/null || true
           
           # 推送代码
-          git remote add gitcode https://oauth2:${{ secrets.GITCODE_TOKEN }}@gitcode.com/${{ env.GITCODE_USER }}/${{ env.REPO_NAME }}.git
+          git remote add gitcode https://oauth2:${{ secrets.GITCODE_TOKEN }}@gitcode.com/${{ env.GITCODE_USER }}/${{ env.REPO_NAME }} || true
           git push --force gitcode refs/heads/*:refs/heads/*
           git push --force --tags gitcode
