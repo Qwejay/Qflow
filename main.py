@@ -2130,6 +2130,11 @@ class ExportWizardDialog(tk.Toplevel):
         exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
         is_python = not getattr(sys, 'frozen', False)
         
+        # 提前在 f-string 外部处理带有反斜杠的字符串替换，避免 Python < 3.12 的语法限制
+        escaped_exe_path = exe_path.replace('\\', '\\\\')
+        escaped_script_path = sys.argv[0].replace('\\', '\\\\')
+        is_python_str = str(is_python).lower()
+        
         run_arg = self.var_mode.get()
         uuid_str = uuid.uuid4().hex
         
@@ -2192,9 +2197,9 @@ class Program {{
             
             // 3. 绝对路径兜底 (开发者模式)
             if (targetFileName == null) {{
-                bool isPython = {str(is_python).lower()};
-                string originalExe = @"{exe_path.replace('\\', '\\\\')}";
-                string scriptPath = @"{sys.argv[0].replace('\\', '\\\\')}";
+                bool isPython = {is_python_str};
+                string originalExe = @"{escaped_exe_path}";
+                string scriptPath = @"{escaped_script_path}";
                 
                 if (File.Exists(originalExe)) {{
                     targetFileName = originalExe;

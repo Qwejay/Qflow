@@ -67,6 +67,7 @@ jobs:
             "--standalone",
             "--onefile",
             "--windows-console-mode=disable",
+            "--enable-plugin=tk-inter",
             "--product-name=Qflow",
             "--product-version=$metadataVersion",
             "--file-description=Qflow Application",
