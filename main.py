@@ -25,7 +25,7 @@ from datetime import datetime
 from collections import namedtuple
 
 __app_name__   = "Qflow"
-__version__    = "2.0.1"
+__version__    = "2.0.2"
 __author__     = "QwejayHuang"
 __company__    = "QwejayHuang"
 __description__= "可视化节点办公自动化引擎"
@@ -816,7 +816,7 @@ class AutomationCore:
             for i in range(1, safe_int(data.get('num_steps', 3)) + 1):
                 if self.stop_event.is_set(): return '__STOP__'
                 target_id = (self._get_next_links(node['id'], str(i)) or [None])[0]
-                if not target_id: continue
+                if not target_id or target_id not in self.project['nodes']: continue
         
                 res_port = self._execute_node(self.project['nodes'][target_id])
                 if res_port in ['yes', 'found', 'out', 'loop', 'success']:
@@ -892,7 +892,8 @@ class AutomationCore:
                     if not res: return 'timeout'
                     if i == 0: primary_res = res
                 if primary_res:
-                    off_x, off_y = safe_int(data.get('target_rect_x',0))-anchors[0].get('rect_y',0), safe_int(data.get('target_rect_y',0))-anchors[0].get('rect_y',0)
+                    off_x = safe_int(data.get('target_rect_x',0)) - anchors[0].get('rect_x',0)
+                    off_y = safe_int(data.get('target_rect_y',0)) - anchors[0].get('rect_y',0)
                     search_region = (max(0, int(primary_res.left+off_x)-15), max(0, int(primary_res.top+off_y)-15), safe_int(data.get('target_rect_w',100))+30, safe_int(data.get('target_rect_h',100))+30)
 
             start_time = time.time()
@@ -938,33 +939,48 @@ class AutomationCore:
                 coord_mode = data.get('coord_mode', 'relative')
                 
                 if action == 'drag':
-                    start_x = safe_int(data.get('start_x', 0)) 
-                    start_y = safe_int(data.get('start_y', 0))
-                    end_x = safe_int(data.get('end_x', 0))
-                    end_y = safe_int(data.get('end_y', 0))
+                    curr_pos_x, curr_pos_y = pyautogui.position()
+                    
+                    raw_sx = node.get('data', {}).get('start_x')
+                    raw_sy = node.get('data', {}).get('start_y')
+                    raw_ex = node.get('data', {}).get('end_x')
+                    raw_ey = node.get('data', {}).get('end_y')
+                    
+                    s_x = curr_pos_x if (raw_sx is None or str(raw_sx).strip() == "") else safe_int(raw_sx, 0)
+                    s_y = curr_pos_y if (raw_sy is None or str(raw_sy).strip() == "") else safe_int(raw_sy, 0)
+                    e_x = curr_pos_x if (raw_ex is None or str(raw_ex).strip() == "") else safe_int(raw_ex, 0)
+                    e_y = curr_pos_y if (raw_ey is None or str(raw_ey).strip() == "") else safe_int(raw_ey, 0)
                     
                     if coord_mode == 'relative' and self.context['window_handle']:
-                        start_x_screen = start_x + win_offset_x
-                        start_y_screen = start_y + win_offset_y
-                        end_x_screen = end_x + win_offset_x
-                        end_y_screen = end_y + win_offset_y
+                        start_x_screen = s_x + win_offset_x if (raw_sx is not None and str(raw_sx).strip() != "") else s_x
+                        start_y_screen = s_y + win_offset_y if (raw_sy is not None and str(raw_sy).strip() != "") else s_y
+                        end_x_screen = e_x + win_offset_x if (raw_ex is not None and str(raw_ex).strip() != "") else e_x
+                        end_y_screen = e_y + win_offset_y if (raw_ey is not None and str(raw_ey).strip() != "") else e_y
                     else:
-                        start_x_screen = start_x
-                        start_y_screen = start_y
-                        end_x_screen = end_x
-                        end_y_screen = end_y
+                        start_x_screen = s_x
+                        start_y_screen = s_y
+                        end_x_screen = e_x
+                        end_y_screen = e_y
                     
                     pyautogui.moveTo(start_x_screen, start_y_screen, duration=0.1)
                     pyautogui.dragTo(end_x_screen, end_y_screen, button='left', duration=dur)
                 
                 else:
-                    raw_x, raw_y = safe_int(data.get('x',0)), safe_int(data.get('y',0))
-                    if coord_mode == 'relative' and self.context['window_handle']:
-                        target_x = raw_x + win_offset_x
-                        target_y = raw_y + win_offset_y
+                    curr_pos_x, curr_pos_y = pyautogui.position()
+                    raw_x_val = node.get('data', {}).get('x')
+                    raw_y_val = node.get('data', {}).get('y')
+                    
+                    if raw_x_val is None or str(raw_x_val).strip() == "":
+                        target_x = curr_pos_x
                     else:
-                        target_x = raw_x
-                        target_y = raw_y
+                        raw_x = safe_int(raw_x_val, 0)
+                        target_x = raw_x + win_offset_x if (coord_mode == 'relative' and self.context['window_handle']) else raw_x
+
+                    if raw_y_val is None or str(raw_y_val).strip() == "":
+                        target_y = curr_pos_y
+                    else:
+                        raw_y = safe_int(raw_y_val, 0)
+                        target_y = raw_y + win_offset_y if (coord_mode == 'relative' and self.context['window_handle']) else raw_y
                     
                     if action == 'click' or action == 'double_click': 
                         clicks = 2 if action == 'double_click' else (2 if str(data.get('click_count', 1)) in ['2', '双击'] else 1)
@@ -1633,8 +1649,8 @@ class PropertyPanel(tk.Frame):
 
             if curr_action in ['click', 'move', 'scroll']:
                 coord = tk.Frame(sec, bg=sec.cget('bg')); coord.pack(fill='x', pady=5)
-                self._compact_input(coord, "X", 'x', data.get('x', 0), safe_int)
-                self._compact_input(coord, "Y", 'y', data.get('y', 0), safe_int)
+                self._compact_input(coord, "X", 'x', data.get('x', ''), safe_int)
+                self._compact_input(coord, "Y", 'y', data.get('y', ''), safe_int)
                 self._btn_icon(coord, "📍", self.app.pick_coordinate, width=3)
                 
             if curr_action == 'scroll':
@@ -1645,14 +1661,14 @@ class PropertyPanel(tk.Frame):
                 start_coord = tk.Frame(sec, bg=sec.cget('bg')); start_coord.pack(fill='x', pady=5)
                 tk.Label(start_coord, text="起始坐标:", bg=sec.cget('bg'), fg=COLORS['accent'], font=('Microsoft YaHei', int(10 * SCALE_FACTOR))).pack(anchor='w', pady=(5,0))
                 start_input = tk.Frame(start_coord, bg=sec.cget('bg')); start_input.pack(fill='x', pady=2)
-                self._compact_input(start_input, "X", 'start_x', data.get('start_x', 0), safe_int)
-                self._compact_input(start_input, "Y", 'start_y', data.get('start_y', 0), safe_int)
+                self._compact_input(start_input, "X", 'start_x', data.get('start_x', ''), safe_int)
+                self._compact_input(start_input, "Y", 'start_y', data.get('start_y', ''), safe_int)
                 self._btn_icon(start_input, "📍", self.app.pick_start_coordinate, width=3)
                 end_coord = tk.Frame(sec, bg=sec.cget('bg')); end_coord.pack(fill='x', pady=5)
                 tk.Label(end_coord, text="目标坐标:", bg=sec.cget('bg'), fg=COLORS['accent'], font=('Microsoft YaHei', int(10 * SCALE_FACTOR))).pack(anchor='w', pady=(5,0))
                 end_input = tk.Frame(end_coord, bg=sec.cget('bg')); end_input.pack(fill='x', pady=2)
-                self._compact_input(end_input, "X", 'end_x', data.get('end_x', 0), safe_int)
-                self._compact_input(end_input, "Y", 'end_y', data.get('end_y', 0), safe_int)
+                self._compact_input(end_input, "X", 'end_x', data.get('end_x', ''), safe_int)
+                self._compact_input(end_input, "Y", 'end_y', data.get('end_y', ''), safe_int)
                 self._btn_icon(end_input, "📍", self.app.pick_end_coordinate, width=3)
             
         elif ntype == 'keyboard':
@@ -1935,8 +1951,9 @@ class PropertyPanel(tk.Frame):
         thr = safe_float(self.current_node.data.get('threshold', 0.98))
         dur = safe_float(self.current_node.data.get('duration', 5.0))
         
-        if self.context['window_handle'] and self.context['window_rect']:
-             win_offset_x, win_offset_y = self.context['window_offset']
+        ctx = self.app.core.context
+        if ctx['window_handle'] and ctx['window_rect']:
+             win_offset_x, win_offset_y = ctx['window_offset']
              abs_x = roi[0] + win_offset_x
              abs_y = roi[1] + win_offset_y
         else:
@@ -1966,6 +1983,7 @@ class PropertyPanel(tk.Frame):
 
     def _audio_monitor_thread(self):
         while self.is_monitoring_audio and self.winfo_exists():
+            print(self.winfo_exists())
             vol = AudioEngine.get_max_audio_peak()
             if vol > 0.001: self.app.log(f"📊 音量峰值: {vol:.4f}", "info")
             time.sleep(0.5)
@@ -2743,12 +2761,22 @@ class App(tk.Tk):
             self.hotkey_listener = keyboard.GlobalHotKeys(mapping)
             self.hotkey_listener.start()
         except Exception: pass
+        
     def stop_hotkeys(self):
         if self.hotkey_listener: self.hotkey_listener.stop(); self.hotkey_listener = None
+        
     def on_hotkey_start(self):
-        if not self.core.running: self.log("⌨️ 快捷键启动", "info"); self.after(0, lambda: self.toggle_run(None))
+        self.after(0, self._safe_hotkey_start)
+
+    def _safe_hotkey_start(self):
+        if not self.core.running: 
+            self.log("⌨️ 快捷键启动", "info")
+            self.toggle_run(None)
     
     def on_hotkey_stop(self):
+        self.after(0, self._safe_hotkey_stop)
+
+    def _safe_hotkey_stop(self):
         if self.core.running: 
             self.log("⌨️ 快捷键停止", "warning")
             if getattr(self, '_auto_run_mode', False) or getattr(self, '_hidden_run_mode', False):
@@ -2757,10 +2785,12 @@ class App(tk.Tk):
             self.core.stop()
 
     def on_hotkey_quit(self):
+        self.after(0, self._safe_hotkey_quit)
+
+    def _safe_hotkey_quit(self):
         if getattr(self, '_show_export_toast', True):
             VisualTips.show_toast("❌ 正在完全退出程序...", duration=1000, position='bottom_right')
-        time.sleep(1)
-        self.quit_app()
+        self.after(1000, self.quit_app)
 
     def open_settings(self): SettingsDialog(self, self)
     def restart_ui(self): data = self.editor.get_data(); self._setup_ui(); self.editor.load_data(data)
@@ -2848,7 +2878,7 @@ class App(tk.Tk):
         self.log("✨ 欢迎使用 Qflow-AI办公自动化软件！", "success")
         self.log("*.  快速上手指引：", "info")
         self.log("1. 【添加节点】从左侧工具栏直接 [拖动] 节点图标到中间画布。", "info")
-        self.log("2. 【建立连线】点击节点右侧 of [○ 端口] 并拖动到另一个节点上。", "info")
+        self.log("2. 【建立连线】点击节点右侧 [○ 端口] 并拖动到另一个节点上。", "info")
         self.log("3. 【配置属性】单选画布上的节点，在右侧面板设置具体参数。", "info")
         self.log("4. 【右键菜单】右键点击 [节点] 可复制或删除；右键点击 [端口] 可清除连线。", "warning")
         self.log("5. 【运行控制】点击上方 [▶ 启动] 或使用快捷键 F9 (启动) / F10 (停止)。", "success")
