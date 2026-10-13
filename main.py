@@ -684,8 +684,16 @@ class AutomationCore:
                 self.active_threads -= 1
                 if self.pending_nodes and not self.stop_event.is_set():
                     next_id = self.pending_nodes.pop(0)
+                    # Reserve the worker slot before releasing the lock so the
+                    # engine cannot observe zero workers and finish prematurely.
+                    self.active_threads += 1
             if next_id is not None:
-                self._fork_node(next_id)
+                try:
+                    threading.Thread(target=self._process_node_thread, args=(next_id,), daemon=True).start()
+                except Exception as e:
+                    with self.thread_lock:
+                        self.active_threads -= 1
+                    self.log(f"无法启动排队节点[{next_id}]: {e}", "error")
 
     def _replace_variables(self, text):
         if not isinstance(text, str): return str(text)
