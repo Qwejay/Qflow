@@ -1515,7 +1515,7 @@ class FlowEditor(tk.Canvas):
                 raise ValueError("项目格式无效：nodes 必须是对象，links 必须是列表")
             node_ids = set(data['nodes'])
             for nid, node_data in data['nodes'].items():
-                if not isinstance(node_data, dict) or node_data.get('type') not in NODE_TYPES:
+                if not isinstance(node_data, dict) or node_data.get('type') not in NODE_CONFIG:
                     raise ValueError(f"节点 {nid} 的类型无效")
                 if not isinstance(node_data.get('data', {}), dict):
                     raise ValueError(f"节点 {nid} 的 data 必须是对象")
