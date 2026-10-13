@@ -693,11 +693,13 @@ class AutomationCore:
             with self.thread_lock:
                 if generation is None:
                     generation = self.run_generation
-                if generation == self.run_generation:
-                    self.running = False
-            if self.performance_stats['start_time']:
-                elapsed = time.time() - self.performance_stats['start_time']
-                self.log(f"📊 执行统计: {self.performance_stats['nodes_executed']}个节点, {self.performance_stats['errors']}个错误, 耗时{elapsed:.2f}秒", "info")
+                if generation != self.run_generation:
+                    return
+                stats = dict(self.performance_stats)
+                self.running = False
+            if stats['start_time']:
+                elapsed = time.time() - stats['start_time']
+                self.log(f"📊 执行统计: {stats['nodes_executed']}个节点, {stats['errors']}个错误, 耗时{elapsed:.2f}秒", "info")
             self.log("🏁 流程结束", "info")
             self.app.after(0, lambda: self._finish_run_ui(generation, reset=False))
             self.app.after(100, lambda: self._finish_run_ui(generation, reset=True))
