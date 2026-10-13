@@ -65,6 +65,12 @@ class RegressionTests(unittest.TestCase):
         cls.CoreProbe = extract_class_with_method(
             "AutomationCore", "_get_next_links"
         )
+        import threading
+        import time
+        cls.StartProbe = extract_class_with_method(
+            "AutomationCore", "start",
+            {"threading": threading, "time": time}
+        )
         cls.LoadProjectProbe = extract_class_with_method(
             "AutomationCore", "load_project",
             {"safe_float": lambda value, default=0.0: float(value),
@@ -82,6 +88,83 @@ class RegressionTests(unittest.TestCase):
         scope = {"json": json}
         exec(compile(module, str(SOURCE), "exec"), scope)
         cls.HistoryManager = scope["HistoryManager"]
+
+    def test_concurrent_start_requests_only_launch_one_engine(self):
+        import threading
+
+        class Event:
+            def __init__(self, set_value=False):
+                self.value = set_value
+            def clear(self):
+                self.value = False
+            def set(self):
+                self.value = True
+
+        class FakeThread:
+            starts = 0
+            def __init__(self, *args, **kwargs):
+                pass
+            def start(self):
+                FakeThread.starts += 1
+
+        class App:
+            def iconify(self):
+                pass
+            def after(self, *args):
+                pass
+            def reset_ui_state(self):
+                pass
+
+        class Engine:
+            log = lambda *args: None
+
+        engine = Engine()
+        engine.thread_lock = threading.Lock()
+        engine.running = False
+        engine.project = {"nodes": {"start": {"type": "start"}}}
+        engine.paused = False
+        engine.stop_event = Event()
+        engine.pause_event = Event(True)
+        engine.active_threads = 0
+        engine.pending_nodes = []
+        engine.runtime_memory = {}
+        engine.context = {}
+        engine.performance_stats = {}
+        engine.app = App()
+
+        from unittest.mock import patch
+        with patch("threading.Thread", FakeThread):
+            threads = [
+                threading.Thread(target=engine.start)
+                for _ in range(8)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        self.assertTrue(engine.running)
+        self.assertEqual(FakeThread.starts, 1)
+
+    def test_queued_worker_launch_failure_clears_queue_and_stops_engine(self):
+        tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+        core = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "AutomationCore"
+        )
+        worker = next(
+            node for node in core.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_process_node_thread"
+        )
+        calls = [
+            node.func.attr
+            for node in ast.walk(worker)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        ]
+        self.assertIn("set", calls)
+        self.assertIn("clear", calls)
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("已停止剩余任务", source)
 
     def test_legacy_link_without_source_port_uses_out(self):
         core = self.CoreProbe()
