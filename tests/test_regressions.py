@@ -71,6 +71,10 @@ class RegressionTests(unittest.TestCase):
             "AutomationCore", "start",
             {"threading": threading, "time": time}
         )
+        cls.MemorySnapshotProbe = extract_class_with_method(
+            "AutomationCore", "_memory_snapshot",
+            {"threading": threading}
+        )
         cls.ForkProbe = extract_class_with_method(
             "AutomationCore", "_fork_node",
             {"threading": threading}
@@ -130,6 +134,7 @@ class RegressionTests(unittest.TestCase):
         engine.active_threads = 0
         engine.pending_nodes = []
         engine.runtime_memory = {}
+        engine.memory_lock = threading.RLock()
         engine.context = {}
         engine.performance_stats = {}
         engine.app = App()
@@ -146,6 +151,57 @@ class RegressionTests(unittest.TestCase):
 
         self.assertTrue(engine.running)
         self.assertEqual(FakeThread.starts, 1)
+
+    def test_start_initialization_failure_resets_running_state(self):
+        import threading
+
+        class Event:
+            def __init__(self, set_value=False):
+                self.value = set_value
+            def clear(self):
+                self.value = False
+            def set(self):
+                self.value = True
+
+        class App:
+            def iconify(self):
+                raise RuntimeError("window unavailable")
+            def after(self, delay, callback):
+                callback()
+
+        engine = self.StartProbe()
+        engine.log = lambda *args: None
+        engine.thread_lock = threading.Lock()
+        engine.memory_lock = threading.RLock()
+        engine.running = False
+        engine.project = {"nodes": {"start": {"type": "start"}}}
+        engine.paused = False
+        engine.stop_event = Event()
+        engine.pause_event = Event(True)
+        engine.active_threads = 0
+        engine.pending_nodes = []
+        engine.runtime_memory = {"old": "value"}
+        engine.app = App()
+        engine.app.reset_ui_state = lambda: None
+
+        with self.assertRaisesRegex(RuntimeError, "window unavailable"):
+            engine.start()
+
+        self.assertFalse(engine.running)
+        self.assertTrue(engine.stop_event.is_set())
+        self.assertTrue(engine.pause_event.is_set())
+        self.assertEqual(engine.pending_nodes, [])
+
+    def test_memory_snapshot_is_consistent_and_detached(self):
+        import threading
+
+        core = self.MemorySnapshotProbe()
+        core.memory_lock = threading.RLock()
+        core.runtime_memory = {"a": 1}
+        snapshot = core._memory_snapshot()
+        core.runtime_memory["b"] = 2
+        self.assertEqual(snapshot, {"a": 1})
+        self.assertEqual(core._memory_snapshot(), {"a": 1, "b": 2})
 
     def test_fork_queues_node_when_worker_limit_is_reached(self):
         import threading
