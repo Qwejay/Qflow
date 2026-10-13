@@ -590,19 +590,35 @@ class AutomationCore:
         self.context = {'window_rect': None, 'window_handle': 0, 'window_offset': (0, 0)}
         self.performance_stats = {'nodes_executed': 0, 'errors': 0, 'start_time': time.time()}
         self.log("🚀 引擎启动", "exec"); self.app.iconify()
-        threading.Thread(target=self._run_flow_engine, args=(start_node_id,), daemon=True).start()
+        try:
+            threading.Thread(target=self._run_flow_engine, args=(start_node_id,), daemon=True).start()
+        except Exception as e:
+            self.running = False
+            self.log(f"无法启动流程引擎: {e}", "error")
+            self.app.after(0, self.app.reset_ui_state)
+            raise
 
     def stop(self):
         if not self.running: return
-        self.stop_event.set(); self.pause_event.set(); self.log("🛑 正在停止...", "warning")
-        # UI state is reset by _run_flow_engine's finally block after workers exit.
+        self.stop_event.set()
+        self.pause_event.set()
+        with self.thread_lock:
+            self.pending_nodes.clear()
+        self.log("🛑 正在停止...", "warning")
+        # The engine waits for active workers before allowing another run.
 
-    def pause(self): 
-        self.paused = True; self.pause_event.clear(); self.log("⏸️ 流程暂停", "paused")
+    def pause(self):
+        if not self.running or self.stop_event.is_set() or self.paused: return
+        self.paused = True
+        self.pause_event.clear()
+        self.log("⏸️ 流程暂停", "paused")
         self.app.after(0, lambda: self.app.update_debug_btn_state(True))
-        
-    def resume(self): 
-        self.paused = False; self.pause_event.set(); self.log("▶️ 流程继续", "info")
+
+    def resume(self):
+        if not self.running or not self.paused: return
+        self.paused = False
+        self.pause_event.set()
+        self.log("▶️ 流程继续", "info")
         self.app.after(0, lambda: self.app.update_debug_btn_state(False))
     
     def _smart_wait(self, seconds):
@@ -624,12 +640,32 @@ class AutomationCore:
             start_nodes = [start_node_id] if start_node_id else [nid for nid, n in self.project['nodes'].items() if n['type'] == 'start']
             if not start_nodes: self.log("未找到开始节点", "error"); return
             for start_id in start_nodes: self._fork_node(start_id)
-            while not self.stop_event.is_set():
-                with self.thread_lock: 
-                    if self.active_threads <= 0: break
-                time.sleep(0.5)
-        except Exception as e: traceback.print_exc(); self.log(f"引擎异常: {str(e)}", "error")
+            while True:
+                with self.thread_lock:
+                    active_threads = self.active_threads
+                if active_threads <= 0:
+                    break
+                # Stop requests prevent new work, but existing workers must exit
+                # before the UI reports completion or permits another run.
+                time.sleep(0.05)
+        except Exception as e:
+            self.stop_event.set()
+            self.pause_event.set()
+            with self.thread_lock:
+                self.pending_nodes.clear()
+            traceback.print_exc()
+            self.log(f"引擎异常: {str(e)}", "error")
         finally:
+            # Never advertise completion while a worker can still touch shared
+            # runtime state; this also covers exceptions during engine startup.
+            with self.thread_lock:
+                self.pending_nodes.clear()
+            while True:
+                with self.thread_lock:
+                    active_threads = self.active_threads
+                if active_threads <= 0:
+                    break
+                time.sleep(0.05)
             self.running = False
             if self.performance_stats['start_time']:
                 elapsed = time.time() - self.performance_stats['start_time']
@@ -856,6 +892,7 @@ class AutomationCore:
             found = False
             while time.time() - start_t < timeout:
                 if self.stop_event.is_set(): return '__STOP__'
+                self._check_pause()
                 peak = AudioEngine.get_max_audio_peak()
                 if mode == 'has_sound':
                     if peak > threshold: found = True; break
@@ -882,6 +919,7 @@ class AutomationCore:
             last_frame = VisionEngine.capture_screen(bbox=target_bbox)
             while time.time() - start_check < timeout:
                 if self.stop_event.is_set(): return '__STOP__'
+                self._check_pause()
                 
                 if self.context['window_handle']:
                     fg_hwnd = user32.GetForegroundWindow()
@@ -1466,7 +1504,7 @@ class FlowEditor(tk.Canvas):
             tags=self.gettags(item)
             if (nid:=next((t[5:] for t in tags if t.startswith("node_")),None)):
                 if "port_out" in tags: 
-                     self.history.save_state(); self.links=[l for l in self.links if not (l['source']==nid and l.get('source_port')==next((t for t in tags if t in self.nodes[nid].outputs),'out'))]; self.redraw_links(); return
+                     self.history.save_state(); self.links=[l for l in self.links if not (l.get('source')==nid and l.get('source_port', 'out')==next((t for t in tags if t in self.nodes[nid].outputs),'out'))]; self.redraw_links(); return
                 if "port_in" in tags: 
                      self.history.save_state(); self.links=[l for l in self.links if not l['target']==nid]; self.redraw_links(); return
         lx, ly = self.get_logical_pos(event.x, event.y); node = next((n for n in reversed(list(self.nodes.values())) if n.contains(lx, ly)), None)
@@ -2518,7 +2556,9 @@ class App(tk.Tk):
     def _load_initial_file(self, auto_run):
         try:
             with open(self.current_file_path, 'r', encoding='utf-8-sig') as fp:
-                self.editor.load_data(json.load(fp))
+                project_data = json.load(fp)
+            if not self.editor.load_data(project_data):
+                raise ValueError("项目结构校验失败，已取消加载")
             self.update_title()
             self.log(f"📂 已加载项目: {self.current_file_path}", "success")
             if auto_run:
@@ -2554,7 +2594,7 @@ class App(tk.Tk):
                         VisualTips.show_toast(f"🟢 程序已在后台待命，请按 {hk_start} 开始执行", duration=2500, position='bottom_right')
         except Exception as e:
             self.log(f"❌ 加载文件失败: {e}", "error")
-            if getattr(self, '_hidden_run_mode', False):
+            if getattr(self, '_hidden_run_mode', False) or getattr(self, '_auto_run_mode', False):
                 self.quit_app()
 
     def setup_tray(self):
@@ -2577,10 +2617,29 @@ class App(tk.Tk):
             self.log(f"托盘初始化失败: {e}", "error")
 
     def quit_app(self):
+        if getattr(self, '_quit_requested', False):
+            return
+        self._quit_requested = True
+        self.stop_hotkeys()
+        if self.core.running:
+            self.core.stop()
         if hasattr(self, 'tray_icon'):
-            try: self.tray_icon.stop()
-            except: pass
-        os._exit(0)
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+        self._finish_quit()
+
+    def _finish_quit(self):
+        with self.core.thread_lock:
+            active_threads = self.core.active_threads
+        if self.core.running or active_threads:
+            self.after(50, self._finish_quit)
+            return
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
 
     def update_title(self):
         filename = os.path.basename(self.current_file_path) if self.current_file_path else "未命名"
@@ -2824,16 +2883,33 @@ class App(tk.Tk):
         ExportWizardDialog(self, self, self.editor.get_data())
 
     def refresh_hotkeys(self):
-        if self.hotkey_listener: self.hotkey_listener.stop()
+        self.stop_hotkeys()
+        mapping = {}
+        for key, callback in (
+            (SETTINGS.get('hotkey_start'), self.on_hotkey_start),
+            (SETTINGS.get('hotkey_stop'), self.on_hotkey_stop),
+            (SETTINGS.get('hotkey_quit'), self.on_hotkey_quit),
+        ):
+            if not key:
+                continue
+            if key in mapping:
+                self.log(f"快捷键冲突：{key} 被多个操作使用，快捷键未启用", "error")
+                return
+            mapping[key] = callback
         try:
-            mapping = {SETTINGS['hotkey_start']: self.on_hotkey_start, SETTINGS['hotkey_stop']: self.on_hotkey_stop}
-            if SETTINGS.get('hotkey_quit'): mapping[SETTINGS['hotkey_quit']] = self.on_hotkey_quit
             self.hotkey_listener = keyboard.GlobalHotKeys(mapping)
             self.hotkey_listener.start()
-        except Exception: pass
-        
+        except Exception as e:
+            self.hotkey_listener = None
+            self.log(f"全局快捷键启动失败: {e}", "error")
+
     def stop_hotkeys(self):
-        if self.hotkey_listener: self.hotkey_listener.stop(); self.hotkey_listener = None
+        listener, self.hotkey_listener = self.hotkey_listener, None
+        if listener:
+            try:
+                listener.stop()
+            except Exception as e:
+                self.log(f"停止全局快捷键监听失败: {e}", "warning")
         
     def on_hotkey_start(self):
         self.after(0, self._safe_hotkey_start)
