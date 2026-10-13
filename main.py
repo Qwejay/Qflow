@@ -919,6 +919,7 @@ class AutomationCore:
             last_frame = VisionEngine.capture_screen(bbox=target_bbox)
             while time.time() - start_check < timeout:
                 if self.stop_event.is_set(): return '__STOP__'
+                self._check_pause()
                 
                 if self.context['window_handle']:
                     fg_hwnd = user32.GetForegroundWindow()
