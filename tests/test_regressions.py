@@ -71,6 +71,10 @@ class RegressionTests(unittest.TestCase):
             "AutomationCore", "start",
             {"threading": threading, "time": time}
         )
+        cls.ForkProbe = extract_class_with_method(
+            "AutomationCore", "_fork_node",
+            {"threading": threading}
+        )
         cls.LoadProjectProbe = extract_class_with_method(
             "AutomationCore", "load_project",
             {"safe_float": lambda value, default=0.0: float(value),
@@ -143,6 +147,54 @@ class RegressionTests(unittest.TestCase):
 
         self.assertTrue(engine.running)
         self.assertEqual(FakeThread.starts, 1)
+
+    def test_fork_queues_node_when_worker_limit_is_reached(self):
+        import threading
+
+        class StopEvent:
+            def is_set(self):
+                return False
+
+        engine = self.ForkProbe()
+        engine.thread_lock = threading.Lock()
+        engine.project = {"nodes": {"next": {}}}
+        engine.stop_event = StopEvent()
+        engine.max_threads = 1
+        engine.active_threads = 1
+        engine.pending_nodes = []
+
+        engine._fork_node("next")
+
+        self.assertEqual(engine.pending_nodes, ["next"])
+        self.assertEqual(engine.active_threads, 1)
+
+    def test_fork_rolls_back_worker_count_when_thread_start_fails(self):
+        import threading
+        from unittest.mock import patch
+
+        class StopEvent:
+            def is_set(self):
+                return False
+
+        class BrokenThread:
+            def __init__(self, *args, **kwargs):
+                pass
+            def start(self):
+                raise RuntimeError("thread start failed")
+
+        engine = self.ForkProbe()
+        engine.thread_lock = threading.Lock()
+        engine.project = {"nodes": {"next": {}}}
+        engine.stop_event = StopEvent()
+        engine.max_threads = 2
+        engine.active_threads = 0
+        engine.pending_nodes = []
+
+        with patch("threading.Thread", BrokenThread):
+            with self.assertRaisesRegex(RuntimeError, "thread start failed"):
+                engine._fork_node("next")
+
+        self.assertEqual(engine.active_threads, 0)
 
     def test_queued_worker_launch_failure_clears_queue_and_stops_engine(self):
         tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
