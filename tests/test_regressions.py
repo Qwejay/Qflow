@@ -71,6 +71,15 @@ class RegressionTests(unittest.TestCase):
             "AutomationCore", "start",
             {"threading": threading, "time": time}
         )
+        cls.StopProbe = extract_class_with_method(
+            "AutomationCore", "stop"
+        )
+        cls.PauseProbe = extract_class_with_method(
+            "AutomationCore", "pause"
+        )
+        cls.ResumeProbe = extract_class_with_method(
+            "AutomationCore", "resume"
+        )
         cls.MemorySnapshotProbe = extract_class_with_method(
             "AutomationCore", "_memory_snapshot",
             {"threading": threading}
@@ -203,6 +212,75 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(engine.stop_event.is_set())
         self.assertTrue(engine.pause_event.is_set())
         self.assertEqual(engine.pending_nodes, [])
+
+    def test_stop_atomically_signals_workers_and_discards_queued_nodes(self):
+        import threading
+
+        class Event:
+            def __init__(self, value=False):
+                self.value = value
+            def set(self):
+                self.value = True
+            def clear(self):
+                self.value = False
+            def is_set(self):
+                return self.value
+
+        core = self.StopProbe()
+        core.thread_lock = threading.Lock()
+        core.running = True
+        core.stop_event = Event()
+        core.pause_event = Event(False)
+        core.pending_nodes = ["queued-a", "queued-b"]
+        logs = []
+        core.log = lambda *args: logs.append(args)
+
+        core.stop()
+
+        self.assertTrue(core.stop_event.is_set())
+        self.assertTrue(core.pause_event.is_set())
+        self.assertEqual(core.pending_nodes, [])
+        self.assertEqual(len(logs), 1)
+
+    def test_pause_and_resume_update_state_under_lock(self):
+        import threading
+
+        class Event:
+            def __init__(self, value=False):
+                self.value = value
+            def set(self):
+                self.value = True
+            def clear(self):
+                self.value = False
+            def is_set(self):
+                return self.value
+
+        class App:
+            def __init__(self):
+                self.calls = []
+            def after(self, delay, callback):
+                callback()
+            def update_debug_btn_state(self, paused):
+                self.calls.append(paused)
+
+        core = self.PauseProbe()
+        core.thread_lock = threading.Lock()
+        core.running = True
+        core.paused = False
+        core.stop_event = Event()
+        core.pause_event = Event(True)
+        core.log = lambda *args: None
+        core.app = App()
+        core.resume = self.ResumeProbe.resume.__get__(core, type(core))
+
+        core.pause()
+        self.assertTrue(core.paused)
+        self.assertFalse(core.pause_event.is_set())
+
+        core.resume()
+        self.assertFalse(core.paused)
+        self.assertTrue(core.pause_event.is_set())
+        self.assertEqual(core.app.calls, [True, False])
 
     def test_parallel_stat_updates_do_not_lose_counts(self):
         import threading
