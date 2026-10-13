@@ -590,19 +590,35 @@ class AutomationCore:
         self.context = {'window_rect': None, 'window_handle': 0, 'window_offset': (0, 0)}
         self.performance_stats = {'nodes_executed': 0, 'errors': 0, 'start_time': time.time()}
         self.log("🚀 引擎启动", "exec"); self.app.iconify()
-        threading.Thread(target=self._run_flow_engine, args=(start_node_id,), daemon=True).start()
+        try:
+            threading.Thread(target=self._run_flow_engine, args=(start_node_id,), daemon=True).start()
+        except Exception as e:
+            self.running = False
+            self.log(f"无法启动流程引擎: {e}", "error")
+            self.app.after(0, self.app.reset_ui_state)
+            raise
 
     def stop(self):
         if not self.running: return
-        self.stop_event.set(); self.pause_event.set(); self.log("🛑 正在停止...", "warning")
-        # UI state is reset by _run_flow_engine's finally block after workers exit.
+        self.stop_event.set()
+        self.pause_event.set()
+        with self.thread_lock:
+            self.pending_nodes.clear()
+        self.log("🛑 正在停止...", "warning")
+        # The engine waits for active workers before allowing another run.
 
-    def pause(self): 
-        self.paused = True; self.pause_event.clear(); self.log("⏸️ 流程暂停", "paused")
+    def pause(self):
+        if not self.running or self.stop_event.is_set() or self.paused: return
+        self.paused = True
+        self.pause_event.clear()
+        self.log("⏸️ 流程暂停", "paused")
         self.app.after(0, lambda: self.app.update_debug_btn_state(True))
-        
-    def resume(self): 
-        self.paused = False; self.pause_event.set(); self.log("▶️ 流程继续", "info")
+
+    def resume(self):
+        if not self.running or not self.paused: return
+        self.paused = False
+        self.pause_event.set()
+        self.log("▶️ 流程继续", "info")
         self.app.after(0, lambda: self.app.update_debug_btn_state(False))
     
     def _smart_wait(self, seconds):
@@ -624,10 +640,14 @@ class AutomationCore:
             start_nodes = [start_node_id] if start_node_id else [nid for nid, n in self.project['nodes'].items() if n['type'] == 'start']
             if not start_nodes: self.log("未找到开始节点", "error"); return
             for start_id in start_nodes: self._fork_node(start_id)
-            while not self.stop_event.is_set():
-                with self.thread_lock: 
-                    if self.active_threads <= 0: break
-                time.sleep(0.5)
+            while True:
+                with self.thread_lock:
+                    active_threads = self.active_threads
+                if active_threads <= 0:
+                    break
+                # Stop requests prevent new work, but existing workers must exit
+                # before the UI reports completion or permits another run.
+                time.sleep(0.05)
         except Exception as e: traceback.print_exc(); self.log(f"引擎异常: {str(e)}", "error")
         finally:
             self.running = False
