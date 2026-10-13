@@ -2615,10 +2615,29 @@ class App(tk.Tk):
             self.log(f"托盘初始化失败: {e}", "error")
 
     def quit_app(self):
+        if getattr(self, '_quit_requested', False):
+            return
+        self._quit_requested = True
+        self.stop_hotkeys()
+        if self.core.running:
+            self.core.stop()
         if hasattr(self, 'tray_icon'):
-            try: self.tray_icon.stop()
-            except: pass
-        os._exit(0)
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+        self._finish_quit()
+
+    def _finish_quit(self):
+        with self.core.thread_lock:
+            active_threads = self.core.active_threads
+        if self.core.running or active_threads:
+            self.after(50, self._finish_quit)
+            return
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
 
     def update_title(self):
         filename = os.path.basename(self.current_file_path) if self.current_file_path else "未命名"
