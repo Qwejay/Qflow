@@ -623,25 +623,27 @@ class AutomationCore:
             raise
 
     def stop(self):
-        if not self.running: return
-        self.stop_event.set()
-        self.pause_event.set()
         with self.thread_lock:
+            if not self.running: return
+            self.stop_event.set()
+            self.pause_event.set()
             self.pending_nodes.clear()
         self.log("🛑 正在停止...", "warning")
         # The engine waits for active workers before allowing another run.
 
     def pause(self):
-        if not self.running or self.stop_event.is_set() or self.paused: return
-        self.paused = True
-        self.pause_event.clear()
+        with self.thread_lock:
+            if not self.running or self.stop_event.is_set() or self.paused: return
+            self.paused = True
+            self.pause_event.clear()
         self.log("⏸️ 流程暂停", "paused")
         self.app.after(0, lambda: self.app.update_debug_btn_state(True))
 
     def resume(self):
-        if not self.running or not self.paused: return
-        self.paused = False
-        self.pause_event.set()
+        with self.thread_lock:
+            if not self.running or not self.paused: return
+            self.paused = False
+            self.pause_event.set()
         self.log("▶️ 流程继续", "info")
         self.app.after(0, lambda: self.app.update_debug_btn_state(False))
     
