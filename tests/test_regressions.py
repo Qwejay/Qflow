@@ -65,36 +65,17 @@ class RegressionTests(unittest.TestCase):
         cls.CoreProbe = extract_class_with_method(
             "AutomationCore", "_get_next_links"
         )
-        cls.HistoryManager = extract_class_with_method(
-            "HistoryManager", "undo"
-        )
-        # Include redo in the same probe so its history semantics are tested too.
         tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
         source_class = next(
             node for node in tree.body
             if isinstance(node, ast.ClassDef) and node.name == "HistoryManager"
         )
-        redo = next(
-            node for node in source_class.body
-            if isinstance(node, ast.FunctionDef) and node.name == "redo"
+        module = ast.fix_missing_locations(
+            ast.Module(body=[copy.deepcopy(source_class)], type_ignores=[])
         )
-        probe = ast.ClassDef(
-            name="HistoryProbe",
-            bases=[],
-            keywords=[],
-            body=[
-                copy.deepcopy(next(
-                    node for node in source_class.body
-                    if isinstance(node, ast.FunctionDef) and node.name == "undo"
-                )),
-                copy.deepcopy(redo),
-            ],
-            decorator_list=[],
-        )
-        module = ast.fix_missing_locations(ast.Module(body=[probe], type_ignores=[]))
-        scope = {}
+        scope = {"json": json}
         exec(compile(module, str(SOURCE), "exec"), scope)
-        cls.HistoryManager = scope["HistoryProbe"]
+        cls.HistoryManager = scope["HistoryManager"]
 
     def test_legacy_link_without_source_port_uses_out(self):
         core = self.CoreProbe()
