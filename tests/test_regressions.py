@@ -65,6 +65,12 @@ class RegressionTests(unittest.TestCase):
         cls.CoreProbe = extract_class_with_method(
             "AutomationCore", "_get_next_links"
         )
+        cls.LoadProjectProbe = extract_class_with_method(
+            "AutomationCore", "load_project",
+            {"safe_float": lambda value, default=0.0: float(value),
+             "get_scale_factor": lambda: (1.0, 1.0),
+             "ImageUtils": type("ImageUtilsStub", (), {"b64_to_img": staticmethod(lambda value: None)})}
+        )
         tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
         source_class = next(
             node for node in tree.body
@@ -139,6 +145,26 @@ class RegressionTests(unittest.TestCase):
     def test_legacy_link_deletion_uses_default_output_port(self):
         source = SOURCE.read_text(encoding="utf-8")
         self.assertIn("l.get('source_port', 'out')==next(", source)
+
+    def test_invalid_metadata_does_not_replace_current_engine_project(self):
+        core = self.LoadProjectProbe()
+        core.project = {"nodes": {"existing": {}}}
+        core.scaling_ratio = 2.0
+        core.breakpoints = {"existing"}
+
+        with self.assertRaises(ValueError):
+            core.load_project({"nodes": {}, "metadata": []})
+
+        self.assertEqual(core.project, {"nodes": {"existing": {}}})
+        self.assertEqual(core.scaling_ratio, 2.0)
+        self.assertEqual(core.breakpoints, {"existing"})
+
+    def test_project_load_preflights_images_before_engine_or_canvas_mutation(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        method_start = source.index("    def load_data(self, data, _rollback=False):")
+        method = source[method_start:source.index("\nclass PropertyPanel", method_start)]
+        self.assertLess(method.index("prepare_images(data.get('nodes', {}))"), method.index("self.app.core.load_project(data)"))
+        self.assertLess(method.index("prepare_images(data.get('nodes', {}))"), method.index('self.delete("all")'))
 
     def test_long_running_detection_nodes_honor_pause(self):
         tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
