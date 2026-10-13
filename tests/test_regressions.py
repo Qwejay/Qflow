@@ -271,7 +271,7 @@ class RegressionTests(unittest.TestCase):
         core.pause_event = Event(True)
         core.log = lambda *args: None
         core.app = App()
-        core.resume = self.ResumeProbe().resume.__get__(core, type(core))
+        core.resume = self.ResumeProbe.resume.__get__(core, type(core))
 
         core.pause()
         self.assertTrue(core.paused)
