@@ -140,6 +140,44 @@ class RegressionTests(unittest.TestCase):
         source = SOURCE.read_text(encoding="utf-8")
         self.assertIn("l.get('source_port', 'out')==next(", source)
 
+    def test_long_running_detection_nodes_honor_pause(self):
+        tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+        core = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "AutomationCore"
+        )
+        execute = next(
+            node for node in core.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_execute_node"
+        )
+        for node_type in ("if_sound", "if_static"):
+            branch = next(
+                node for node in ast.walk(execute)
+                if isinstance(node, ast.If)
+                and isinstance(node.test, ast.Compare)
+                and isinstance(node.test.left, ast.Name)
+                and node.test.left.id == "ntype"
+                and any(
+                    isinstance(value, ast.Constant) and value.value == node_type
+                    for value in node.test.comparators
+                )
+            )
+            loops = [
+                node for node in ast.walk(branch)
+                if isinstance(node, ast.While)
+            ]
+            self.assertTrue(loops, f"{node_type} should contain a polling loop")
+            self.assertTrue(
+                any(
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Attribute)
+                    and call.func.attr == "_check_pause"
+                    for loop in loops
+                    for call in ast.walk(loop)
+                ),
+                f"{node_type} polling loop must honor pause",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
