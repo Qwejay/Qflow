@@ -593,16 +593,28 @@ class AutomationCore:
                 except Exception: pass
 
     def start(self, start_node_id=None):
-        if self.running or not self.project: return
-        self.running = True; self.paused = False; self.stop_event.clear(); self.pause_event.set()
-        self.runtime_memory = {}; self.active_threads = 0; self.pending_nodes.clear()
+        with self.thread_lock:
+            if self.running or not self.project:
+                return
+            self.running = True
+            self.paused = False
+            self.stop_event.clear()
+            self.pause_event.set()
+            self.active_threads = 0
+            self.pending_nodes.clear()
+        self.runtime_memory = {}
         self.context = {'window_rect': None, 'window_handle': 0, 'window_offset': (0, 0)}
         self.performance_stats = {'nodes_executed': 0, 'errors': 0, 'start_time': time.time()}
-        self.log("🚀 引擎启动", "exec"); self.app.iconify()
+        self.log("🚀 引擎启动", "exec")
+        self.app.iconify()
         try:
             threading.Thread(target=self._run_flow_engine, args=(start_node_id,), daemon=True).start()
         except Exception as e:
-            self.running = False
+            with self.thread_lock:
+                self.running = False
+                self.stop_event.set()
+                self.pause_event.set()
+                self.pending_nodes.clear()
             self.log(f"无法启动流程引擎: {e}", "error")
             self.app.after(0, self.app.reset_ui_state)
             raise
@@ -738,7 +750,10 @@ class AutomationCore:
                 except Exception as e:
                     with self.thread_lock:
                         self.active_threads -= 1
-                    self.log(f"无法启动排队节点[{next_id}]: {e}", "error")
+                        self.pending_nodes.clear()
+                        self.stop_event.set()
+                        self.pause_event.set()
+                    self.log(f"无法启动排队节点[{next_id}]，已停止剩余任务: {e}", "error")
 
     def _replace_variables(self, text):
         if not isinstance(text, str): return str(text)

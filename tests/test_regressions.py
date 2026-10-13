@@ -65,6 +65,16 @@ class RegressionTests(unittest.TestCase):
         cls.CoreProbe = extract_class_with_method(
             "AutomationCore", "_get_next_links"
         )
+        import threading
+        import time
+        cls.StartProbe = extract_class_with_method(
+            "AutomationCore", "start",
+            {"threading": threading, "time": time}
+        )
+        cls.ForkProbe = extract_class_with_method(
+            "AutomationCore", "_fork_node",
+            {"threading": threading}
+        )
         cls.LoadProjectProbe = extract_class_with_method(
             "AutomationCore", "load_project",
             {"safe_float": lambda value, default=0.0: float(value),
@@ -82,6 +92,129 @@ class RegressionTests(unittest.TestCase):
         scope = {"json": json}
         exec(compile(module, str(SOURCE), "exec"), scope)
         cls.HistoryManager = scope["HistoryManager"]
+
+    def test_concurrent_start_requests_only_launch_one_engine(self):
+        import threading
+
+        class Event:
+            def __init__(self, set_value=False):
+                self.value = set_value
+            def clear(self):
+                self.value = False
+            def set(self):
+                self.value = True
+
+        class FakeThread:
+            starts = 0
+            def __init__(self, *args, **kwargs):
+                pass
+            def start(self):
+                FakeThread.starts += 1
+
+        class App:
+            def iconify(self):
+                pass
+            def after(self, *args):
+                pass
+            def reset_ui_state(self):
+                pass
+
+        engine = self.StartProbe()
+        engine.log = lambda *args: None
+        engine.thread_lock = threading.Lock()
+        engine.running = False
+        engine.project = {"nodes": {"start": {"type": "start"}}}
+        engine.paused = False
+        engine.stop_event = Event()
+        engine.pause_event = Event(True)
+        engine.active_threads = 0
+        engine.pending_nodes = []
+        engine.runtime_memory = {}
+        engine.context = {}
+        engine.performance_stats = {}
+        engine.app = App()
+        engine._run_flow_engine = lambda start_node_id=None: None
+
+        from unittest.mock import patch
+        real_thread = threading.Thread
+        threads = [real_thread(target=engine.start) for _ in range(8)]
+        with patch("threading.Thread", FakeThread):
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        self.assertTrue(engine.running)
+        self.assertEqual(FakeThread.starts, 1)
+
+    def test_fork_queues_node_when_worker_limit_is_reached(self):
+        import threading
+
+        class StopEvent:
+            def is_set(self):
+                return False
+
+        engine = self.ForkProbe()
+        engine.thread_lock = threading.Lock()
+        engine.project = {"nodes": {"next": {}}}
+        engine.stop_event = StopEvent()
+        engine.max_threads = 1
+        engine.active_threads = 1
+        engine.pending_nodes = []
+
+        engine._fork_node("next")
+
+        self.assertEqual(engine.pending_nodes, ["next"])
+        self.assertEqual(engine.active_threads, 1)
+
+    def test_fork_rolls_back_worker_count_when_thread_start_fails(self):
+        import threading
+        from unittest.mock import patch
+
+        class StopEvent:
+            def is_set(self):
+                return False
+
+        class BrokenThread:
+            def __init__(self, *args, **kwargs):
+                pass
+            def start(self):
+                raise RuntimeError("thread start failed")
+
+        engine = self.ForkProbe()
+        engine.thread_lock = threading.Lock()
+        engine.project = {"nodes": {"next": {}}}
+        engine.stop_event = StopEvent()
+        engine.max_threads = 2
+        engine.active_threads = 0
+        engine.pending_nodes = []
+        engine._process_node_thread = lambda node_id: None
+
+        with patch("threading.Thread", BrokenThread):
+            with self.assertRaisesRegex(RuntimeError, "thread start failed"):
+                engine._fork_node("next")
+
+        self.assertEqual(engine.active_threads, 0)
+
+    def test_queued_worker_launch_failure_clears_queue_and_stops_engine(self):
+        tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+        core = next(
+            node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "AutomationCore"
+        )
+        worker = next(
+            node for node in core.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_process_node_thread"
+        )
+        calls = [
+            node.func.attr
+            for node in ast.walk(worker)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        ]
+        self.assertIn("set", calls)
+        self.assertIn("clear", calls)
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("已停止剩余任务", source)
 
     def test_legacy_link_without_source_port_uses_out(self):
         core = self.CoreProbe()
