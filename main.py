@@ -560,7 +560,8 @@ class AutomationCore:
         self.running = False; self.paused = False; self.stop_event = threading.Event(); self.pause_event = threading.Event()
         self.log = log_callback; self.app = app_instance; self.project = None; self.runtime_memory = {}; self.io_lock = threading.Lock()
         self.active_threads = 0; self.thread_lock = threading.Lock(); self.scaling_ratio = 1.0; self.breakpoints = set()
-        self.max_threads = 50 
+        self.max_threads = 50
+        self.pending_nodes = []
         self.context = {'window_rect': None, 'window_handle': 0, 'window_offset': (0, 0)}
         self.performance_stats = {'nodes_executed': 0, 'errors': 0, 'start_time': None}
 
@@ -585,7 +586,7 @@ class AutomationCore:
     def start(self, start_node_id=None):
         if self.running or not self.project: return
         self.running = True; self.paused = False; self.stop_event.clear(); self.pause_event.set()
-        self.runtime_memory = {}; self.active_threads = 0
+        self.runtime_memory = {}; self.active_threads = 0; self.pending_nodes.clear()
         self.context = {'window_rect': None, 'window_handle': 0, 'window_offset': (0, 0)}
         self.performance_stats = {'nodes_executed': 0, 'errors': 0, 'start_time': time.time()}
         self.log("🚀 引擎启动", "exec"); self.app.iconify()
@@ -641,6 +642,9 @@ class AutomationCore:
     def _fork_node(self, node_id):
         with self.thread_lock:
             if node_id not in self.project['nodes'] or self.stop_event.is_set(): return
+            if self.active_threads >= self.max_threads:
+                self.pending_nodes.append(node_id)
+                return
             self.active_threads += 1
         try:
             threading.Thread(target=self._process_node_thread, args=(node_id,), daemon=True).start()
@@ -675,7 +679,13 @@ class AutomationCore:
                 if self.stop_event.is_set(): break
                 self._fork_node(next_id)
         finally:
-            with self.thread_lock: self.active_threads -= 1
+            next_id = None
+            with self.thread_lock:
+                self.active_threads -= 1
+                if self.pending_nodes and not self.stop_event.is_set():
+                    next_id = self.pending_nodes.pop(0)
+            if next_id is not None:
+                self._fork_node(next_id)
 
     def _replace_variables(self, text):
         if not isinstance(text, str): return str(text)
