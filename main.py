@@ -558,7 +558,7 @@ class LogPanel(tk.Frame):
 class AutomationCore:
     def __init__(self, log_callback, app_instance):
         self.running = False; self.paused = False; self.stop_event = threading.Event(); self.pause_event = threading.Event()
-        self.log = log_callback; self.app = app_instance; self.project = None; self.runtime_memory = {}; self.memory_lock = threading.RLock(); self.io_lock = threading.Lock()
+        self.log = log_callback; self.app = app_instance; self.project = None; self.runtime_memory = {}; self.memory_lock = threading.RLock(); self.io_lock = threading.Lock(); self.run_generation = 0
         self.active_threads = 0; self.thread_lock = threading.Lock(); self.scaling_ratio = 1.0; self.breakpoints = set()
         self.max_threads = 50
         self.pending_nodes = []
@@ -597,6 +597,8 @@ class AutomationCore:
             if self.running or not self.project:
                 return
             self.running = True
+            self.run_generation += 1
+            generation = self.run_generation
             self.paused = False
             self.stop_event.clear()
             self.pause_event.set()
@@ -609,7 +611,7 @@ class AutomationCore:
             self.performance_stats = {'nodes_executed': 0, 'errors': 0, 'start_time': time.time()}
             self.log("🚀 引擎启动", "exec")
             self.app.iconify()
-            threading.Thread(target=self._run_flow_engine, args=(start_node_id,), daemon=True).start()
+            threading.Thread(target=self._run_flow_engine, args=(start_node_id, generation), daemon=True).start()
         except Exception as e:
             with self.thread_lock:
                 self.running = False
@@ -657,7 +659,7 @@ class AutomationCore:
     
     def _get_next_links(self, node_id, port_name='out'): return [l['target'] for l in self.project['links'] if l.get('source') == node_id and l.get('source_port', 'out') == port_name and l.get('target') in self.project['nodes']]
     
-    def _run_flow_engine(self, start_node_id=None):
+    def _run_flow_engine(self, start_node_id=None, generation=None):
         try:
             start_nodes = [start_node_id] if start_node_id else [nid for nid, n in self.project['nodes'].items() if n['type'] == 'start']
             if not start_nodes: self.log("未找到开始节点", "error"); return
@@ -688,14 +690,27 @@ class AutomationCore:
                 if active_threads <= 0:
                     break
                 time.sleep(0.05)
-            self.running = False
+            with self.thread_lock:
+                if generation is None:
+                    generation = self.run_generation
+                if generation == self.run_generation:
+                    self.running = False
             if self.performance_stats['start_time']:
                 elapsed = time.time() - self.performance_stats['start_time']
                 self.log(f"📊 执行统计: {self.performance_stats['nodes_executed']}个节点, {self.performance_stats['errors']}个错误, 耗时{elapsed:.2f}秒", "info")
-            self.log("🏁 流程结束", "info"); 
-            self.app.highlight_node_safe(None); 
-            self.app.after(0, self.app.deiconify); 
-            self.app.after(100, self.app.reset_ui_state)
+            self.log("🏁 流程结束", "info")
+            self.app.after(0, lambda: self._finish_run_ui(generation, reset=False))
+            self.app.after(100, lambda: self._finish_run_ui(generation, reset=True))
+
+    def _finish_run_ui(self, generation, reset=False):
+        with self.thread_lock:
+            if generation != self.run_generation or self.running:
+                return
+        if reset:
+            self.app.reset_ui_state()
+        else:
+            self.app.highlight_node_safe(None)
+            self.app.deiconify()
 
     def _fork_node(self, node_id):
         with self.thread_lock:
