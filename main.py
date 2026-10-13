@@ -594,7 +594,7 @@ class AutomationCore:
     def stop(self):
         if not self.running: return
         self.stop_event.set(); self.pause_event.set(); self.log("🛑 正在停止...", "warning")
-        self.app.after(0, self.app.reset_ui_state)
+        # UI state is reset by _run_flow_engine's finally block after workers exit.
 
     def pause(self): 
         self.paused = True; self.pause_event.clear(); self.log("⏸️ 流程暂停", "paused")
