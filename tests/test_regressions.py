@@ -161,7 +161,8 @@ class RegressionTests(unittest.TestCase):
 
     def test_project_load_preflights_images_before_engine_or_canvas_mutation(self):
         source = SOURCE.read_text(encoding="utf-8")
-        method = source[source.index("    def load_data(self, data):"):source.index("\nclass PropertyPanel", source.index("    def load_data(self, data):"))]
+        method_start = source.index("    def load_data(self, data, _rollback=False):")
+        method = source[method_start:source.index("\nclass PropertyPanel", method_start)]
         self.assertLess(method.index("prepare_images(data.get('nodes', {}))"), method.index("self.app.core.load_project(data)"))
         self.assertLess(method.index("prepare_images(data.get('nodes', {}))"), method.index('self.delete("all")'))
 
