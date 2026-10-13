@@ -1502,7 +1502,7 @@ class FlowEditor(tk.Canvas):
             tags=self.gettags(item)
             if (nid:=next((t[5:] for t in tags if t.startswith("node_")),None)):
                 if "port_out" in tags: 
-                     self.history.save_state(); self.links=[l for l in self.links if not (l['source']==nid and l.get('source_port')==next((t for t in tags if t in self.nodes[nid].outputs),'out'))]; self.redraw_links(); return
+                     self.history.save_state(); self.links=[l for l in self.links if not (l.get('source')==nid and l.get('source_port', 'out')==next((t for t in tags if t in self.nodes[nid].outputs),'out'))]; self.redraw_links(); return
                 if "port_in" in tags: 
                      self.history.save_state(); self.links=[l for l in self.links if not l['target']==nid]; self.redraw_links(); return
         lx, ly = self.get_logical_pos(event.x, event.y); node = next((n for n in reversed(list(self.nodes.values())) if n.contains(lx, ly)), None)
