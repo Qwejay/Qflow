@@ -75,6 +75,10 @@ class RegressionTests(unittest.TestCase):
             "AutomationCore", "_memory_snapshot",
             {"threading": threading}
         )
+        cls.FinishUiProbe = extract_class_with_method(
+            "AutomationCore", "_finish_run_ui",
+            {"threading": threading}
+        )
         cls.ForkProbe = extract_class_with_method(
             "AutomationCore", "_fork_node",
             {"threading": threading}
@@ -127,6 +131,7 @@ class RegressionTests(unittest.TestCase):
         engine.log = lambda *args: None
         engine.thread_lock = threading.Lock()
         engine.running = False
+        engine.run_generation = 0
         engine.project = {"nodes": {"start": {"type": "start"}}}
         engine.paused = False
         engine.stop_event = Event()
@@ -193,6 +198,31 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(engine.stop_event.is_set())
         self.assertTrue(engine.pause_event.is_set())
         self.assertEqual(engine.pending_nodes, [])
+
+    def test_stale_run_cannot_reset_new_run_ui(self):
+        import threading
+
+        class App:
+            def __init__(self):
+                self.calls = []
+            def reset_ui_state(self):
+                self.calls.append("reset")
+            def highlight_node_safe(self, node_id):
+                self.calls.append(("highlight", node_id))
+            def deiconify(self):
+                self.calls.append("show")
+
+        core = self.FinishUiProbe()
+        core.thread_lock = threading.Lock()
+        core.run_generation = 2
+        core.running = False
+        core.app = App()
+
+        core._finish_run_ui(1, reset=True)
+        self.assertEqual(core.app.calls, [])
+
+        core._finish_run_ui(2, reset=True)
+        self.assertEqual(core.app.calls, ["reset"])
 
     def test_memory_snapshot_is_consistent_and_detached(self):
         import threading
