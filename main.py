@@ -2909,18 +2909,24 @@ class App(tk.Tk):
                     if os.path.exists(temp_path): os.remove(temp_path)
                 self.log(f"💾 已保存到: {target_path}", "success")
                 self.update_title()
+                return True
             except Exception as e:
                 self.log(f"❌ 保存失败: {e}", "error")
+                return False
         else:
-            self.save_as()
-            
+            return self.save_as()
+
     def save_as(self):
-        if (f:=filedialog.asksaveasfilename(defaultextension=".qflow", filetypes=[("Qflow", "*.qflow"), ("All", "*.*")])):
-            previous_path = self.current_file_path
-            self.current_file_path = f
-            self.save()
-            if not os.path.isfile(f):
-                self.current_file_path = previous_path
+        f = filedialog.asksaveasfilename(defaultextension=".qflow", filetypes=[("Qflow", "*.qflow"), ("All", "*.*")])
+        if not f:
+            return False
+        previous_path = self.current_file_path
+        self.current_file_path = f
+        if not self.save():
+            self.current_file_path = previous_path
+            self.update_title()
+            return False
+        return True
             
     def load(self):
         if (f:=filedialog.askopenfilename(filetypes=[("Qflow", "*.qflow"), ("All", "*.*")])): 
