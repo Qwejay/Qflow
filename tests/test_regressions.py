@@ -133,6 +133,7 @@ class RegressionTests(unittest.TestCase):
         engine.context = {}
         engine.performance_stats = {}
         engine.app = App()
+        engine._run_flow_engine = lambda start_node_id=None: None
 
         from unittest.mock import patch
         real_thread = threading.Thread
