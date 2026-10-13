@@ -1081,15 +1081,19 @@ class HistoryManager:
 
     def undo(self, event=None):
         if not self.undo_stack: return
-        self.redo_stack.append(self.editor.get_data())
-        self.editor.load_data(self.undo_stack.pop())
-        self.editor.app.property_panel.clear()
+        current = self.editor.get_data()
+        if self.editor.load_data(self.undo_stack[-1]):
+            self.undo_stack.pop()
+            self.redo_stack.append(current)
+            self.editor.app.property_panel.clear()
 
     def redo(self, event=None):
         if not self.redo_stack: return
-        self.undo_stack.append(self.editor.get_data())
-        self.editor.load_data(self.redo_stack.pop())
-        self.editor.app.property_panel.clear()
+        current = self.editor.get_data()
+        if self.editor.load_data(self.redo_stack[-1]):
+            self.redo_stack.pop()
+            self.undo_stack.append(current)
+            self.editor.app.property_panel.clear()
 
 class GraphNode:
     next_node_number = 1
@@ -1351,7 +1355,7 @@ class FlowEditor(tk.Canvas):
     
     def delete_node(self,node_id):
         if node_id in self.nodes:
-            self.links = [l for l in self.links if l['source'] != node_id and l['target'] != node_id]
+            self.links = [l for l in self.links if l.get('source') != node_id and l.get('target') != node_id]
             self.nodes[node_id].clear_widgets(); self.delete(f"node_{node_id}"); del self.nodes[node_id]; self.redraw_links()
 
     def on_scroll(self, e):
@@ -1422,7 +1426,13 @@ class FlowEditor(tk.Canvas):
                 dist = math.hypot(lx-(node.x+15 if is_reroute else node.x), ly-node.get_input_port_y(visual=False))
                 if node.id!=self.wire_start['node'].id and dist < (45/self.zoom):
                     if node.type=='start': continue
-                    self.history.save_state(); self.links.append({'id':str(uuid.uuid4()),'source':self.wire_start['node'].id,'source_port':self.wire_start['port'],'target':node.id}); self.redraw_links(); break
+                    source_id = self.wire_start['node'].id
+                    source_port = self.wire_start['port']
+                    if not any(l.get('source') == source_id and l.get('source_port', 'out') == source_port and l.get('target') == node.id for l in self.links):
+                        self.history.save_state()
+                        self.links.append({'id':str(uuid.uuid4()),'source':source_id,'source_port':source_port,'target':node.id})
+                        self.redraw_links()
+                    break
         self.drag_data,self.wire_start,self.temp_wire={"type":None},None,None
     
     def select_node(self, node_id, add=False):
@@ -1550,9 +1560,14 @@ class FlowEditor(tk.Canvas):
                         raise ValueError(f"节点 {nid} 的坐标 {coordinate} 无效")
                     if not math.isfinite(value):
                         raise ValueError(f"节点 {nid} 的坐标 {coordinate} 必须是有限数值")
+            links = []
             for link in data.get('links', []):
                 if not isinstance(link, dict) or link.get('source') not in node_ids or link.get('target') not in node_ids:
                     raise ValueError("项目包含无效连线：源节点或目标节点不存在")
+                normalized_link = dict(link)
+                normalized_link.setdefault('id', str(uuid.uuid4()))
+                normalized_link.setdefault('source_port', 'out')
+                links.append(normalized_link)
             self.app.core.load_project(data)
             self.delete("all"); self.nodes.clear(); self.links.clear()
             breakpoints = set(data.get('breakpoints', []))
@@ -1572,7 +1587,7 @@ class FlowEditor(tk.Canvas):
                 
                 n = self.add_node(n_data['type'],n_data['x'],n_data['y'],data=d,node_id=nid, save_history=False)
                 if n_data.get('breakpoint', False) or nid in breakpoints: n.has_breakpoint = True; n.draw()
-            self.links=data.get('links',[])
+            self.links = links
             self.full_redraw()
             return True
         except Exception as e:
