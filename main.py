@@ -1519,6 +1519,13 @@ class FlowEditor(tk.Canvas):
                     raise ValueError(f"节点 {nid} 的类型无效")
                 if not isinstance(node_data.get('data', {}), dict):
                     raise ValueError(f"节点 {nid} 的 data 必须是对象")
+                for coordinate in ('x', 'y'):
+                    try:
+                        value = float(node_data[coordinate])
+                    except (KeyError, TypeError, ValueError):
+                        raise ValueError(f"节点 {nid} 的坐标 {coordinate} 无效")
+                    if not math.isfinite(value):
+                        raise ValueError(f"节点 {nid} 的坐标 {coordinate} 必须是有限数值")
             for link in data.get('links', []):
                 if not isinstance(link, dict) or link.get('source') not in node_ids or link.get('target') not in node_ids:
                     raise ValueError("项目包含无效连线：源节点或目标节点不存在")
@@ -1528,7 +1535,7 @@ class FlowEditor(tk.Canvas):
             
             max_node_number = 0
             for n_data in data.get('nodes',{}).values():
-                node_number = n_data.get('data', {}).get('node_number', 0)
+                node_number = safe_int(n_data.get('data', {}).get('node_number', 0), 0)
                 if node_number > max_node_number:
                     max_node_number = node_number
             GraphNode.next_node_number = max_node_number + 1
