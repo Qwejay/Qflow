@@ -1574,7 +1574,10 @@ class FlowEditor(tk.Canvas):
                 if n_data.get('breakpoint', False) or nid in breakpoints: n.has_breakpoint = True; n.draw()
             self.links=data.get('links',[])
             self.full_redraw()
-        except Exception as e: self.app.log(f"❌ 加载失败: {e}", "error")
+            return True
+        except Exception as e:
+            self.app.log(f"❌ 加载失败: {e}", "error")
+            return False
 
 class PropertyPanel(tk.Frame):
     def __init__(self, parent, app):
@@ -2896,9 +2899,15 @@ class App(tk.Tk):
     def save(self):
         if self.current_file_path:
             try:
-                with open(self.current_file_path, 'w', encoding='utf-8') as fp:
-                    json.dump(self.editor.get_data(), fp, ensure_ascii=False, indent=2)
-                self.log(f"💾 已保存到: {self.current_file_path}", "success")
+                target_path = self.current_file_path
+                temp_path = target_path + ".tmp"
+                try:
+                    with open(temp_path, 'w', encoding='utf-8') as fp:
+                        json.dump(self.editor.get_data(), fp, ensure_ascii=False, indent=2)
+                    os.replace(temp_path, target_path)
+                finally:
+                    if os.path.exists(temp_path): os.remove(temp_path)
+                self.log(f"💾 已保存到: {target_path}", "success")
                 self.update_title()
             except Exception as e:
                 self.log(f"❌ 保存失败: {e}", "error")
@@ -2916,8 +2925,10 @@ class App(tk.Tk):
     def load(self):
         if (f:=filedialog.askopenfilename(filetypes=[("Qflow", "*.qflow"), ("All", "*.*")])): 
             try:
-                with open(f, 'r', encoding='utf-8-sig') as fp: 
-                    self.editor.load_data(json.load(fp))
+                with open(f, 'r', encoding='utf-8-sig') as fp:
+                    project_data = json.load(fp)
+                if not self.editor.load_data(project_data):
+                    return
                 self.current_file_path = f
                 self.update_title()
                 self.log(f"📂 已加载: {f}", "success")
