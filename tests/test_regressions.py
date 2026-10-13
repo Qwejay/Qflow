@@ -71,6 +71,18 @@ class RegressionTests(unittest.TestCase):
             "AutomationCore", "start",
             {"threading": threading, "time": time}
         )
+        cls.MemorySnapshotProbe = extract_class_with_method(
+            "AutomationCore", "_memory_snapshot",
+            {"threading": threading}
+        )
+        cls.IncrementStatProbe = extract_class_with_method(
+            "AutomationCore", "_increment_stat",
+            {"threading": threading}
+        )
+        cls.FinishUiProbe = extract_class_with_method(
+            "AutomationCore", "_finish_run_ui",
+            {"threading": threading}
+        )
         cls.ForkProbe = extract_class_with_method(
             "AutomationCore", "_fork_node",
             {"threading": threading}
@@ -123,6 +135,7 @@ class RegressionTests(unittest.TestCase):
         engine.log = lambda *args: None
         engine.thread_lock = threading.Lock()
         engine.running = False
+        engine.run_generation = 0
         engine.project = {"nodes": {"start": {"type": "start"}}}
         engine.paused = False
         engine.stop_event = Event()
@@ -130,6 +143,7 @@ class RegressionTests(unittest.TestCase):
         engine.active_threads = 0
         engine.pending_nodes = []
         engine.runtime_memory = {}
+        engine.memory_lock = threading.RLock()
         engine.context = {}
         engine.performance_stats = {}
         engine.app = App()
@@ -146,6 +160,109 @@ class RegressionTests(unittest.TestCase):
 
         self.assertTrue(engine.running)
         self.assertEqual(FakeThread.starts, 1)
+
+    def test_start_initialization_failure_resets_running_state(self):
+        import threading
+
+        class Event:
+            def __init__(self, set_value=False):
+                self.value = set_value
+            def clear(self):
+                self.value = False
+            def set(self):
+                self.value = True
+            def is_set(self):
+                return self.value
+
+        class App:
+            def iconify(self):
+                raise RuntimeError("window unavailable")
+            def after(self, delay, callback):
+                callback()
+
+        engine = self.StartProbe()
+        engine.log = lambda *args: None
+        engine.thread_lock = threading.Lock()
+        engine.memory_lock = threading.RLock()
+        engine.running = False
+        engine.run_generation = 0
+        engine.project = {"nodes": {"start": {"type": "start"}}}
+        engine.paused = False
+        engine.stop_event = Event()
+        engine.pause_event = Event(True)
+        engine.active_threads = 0
+        engine.pending_nodes = []
+        engine.runtime_memory = {"old": "value"}
+        engine.app = App()
+        engine.app.reset_ui_state = lambda: None
+
+        with self.assertRaisesRegex(RuntimeError, "window unavailable"):
+            engine.start()
+
+        self.assertFalse(engine.running)
+        self.assertTrue(engine.stop_event.is_set())
+        self.assertTrue(engine.pause_event.is_set())
+        self.assertEqual(engine.pending_nodes, [])
+
+    def test_parallel_stat_updates_do_not_lose_counts(self):
+        import threading
+
+        core = self.IncrementStatProbe()
+        core.stats_lock = threading.Lock()
+        core.performance_stats = {"nodes_executed": 0}
+        workers = 8
+        increments = 5000
+        threads = [
+            threading.Thread(
+                target=lambda: [
+                    core._increment_stat("nodes_executed")
+                    for _ in range(increments)
+                ]
+            )
+            for _ in range(workers)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(core.performance_stats["nodes_executed"], workers * increments)
+
+    def test_stale_run_cannot_reset_new_run_ui(self):
+        import threading
+
+        class App:
+            def __init__(self):
+                self.calls = []
+            def reset_ui_state(self):
+                self.calls.append("reset")
+            def highlight_node_safe(self, node_id):
+                self.calls.append(("highlight", node_id))
+            def deiconify(self):
+                self.calls.append("show")
+
+        core = self.FinishUiProbe()
+        core.thread_lock = threading.Lock()
+        core.run_generation = 2
+        core.running = False
+        core.app = App()
+
+        core._finish_run_ui(1, reset=True)
+        self.assertEqual(core.app.calls, [])
+
+        core._finish_run_ui(2, reset=True)
+        self.assertEqual(core.app.calls, ["reset"])
+
+    def test_memory_snapshot_is_consistent_and_detached(self):
+        import threading
+
+        core = self.MemorySnapshotProbe()
+        core.memory_lock = threading.RLock()
+        core.runtime_memory = {"a": 1}
+        snapshot = core._memory_snapshot()
+        core.runtime_memory["b"] = 2
+        self.assertEqual(snapshot, {"a": 1})
+        self.assertEqual(core._memory_snapshot(), {"a": 1, "b": 2})
 
     def test_fork_queues_node_when_worker_limit_is_reached(self):
         import threading

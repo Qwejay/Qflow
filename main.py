@@ -558,7 +558,7 @@ class LogPanel(tk.Frame):
 class AutomationCore:
     def __init__(self, log_callback, app_instance):
         self.running = False; self.paused = False; self.stop_event = threading.Event(); self.pause_event = threading.Event()
-        self.log = log_callback; self.app = app_instance; self.project = None; self.runtime_memory = {}; self.io_lock = threading.Lock()
+        self.log = log_callback; self.app = app_instance; self.project = None; self.runtime_memory = {}; self.memory_lock = threading.RLock(); self.stats_lock = threading.Lock(); self.io_lock = threading.Lock(); self.run_generation = 0
         self.active_threads = 0; self.thread_lock = threading.Lock(); self.scaling_ratio = 1.0; self.breakpoints = set()
         self.max_threads = 50
         self.pending_nodes = []
@@ -597,18 +597,21 @@ class AutomationCore:
             if self.running or not self.project:
                 return
             self.running = True
+            self.run_generation += 1
+            generation = self.run_generation
             self.paused = False
             self.stop_event.clear()
             self.pause_event.set()
             self.active_threads = 0
             self.pending_nodes.clear()
-        self.runtime_memory = {}
-        self.context = {'window_rect': None, 'window_handle': 0, 'window_offset': (0, 0)}
-        self.performance_stats = {'nodes_executed': 0, 'errors': 0, 'start_time': time.time()}
-        self.log("🚀 引擎启动", "exec")
-        self.app.iconify()
         try:
-            threading.Thread(target=self._run_flow_engine, args=(start_node_id,), daemon=True).start()
+            with self.memory_lock:
+                self.runtime_memory.clear()
+            self.context = {'window_rect': None, 'window_handle': 0, 'window_offset': (0, 0)}
+            self.performance_stats = {'nodes_executed': 0, 'errors': 0, 'start_time': time.time()}
+            self.log("🚀 引擎启动", "exec")
+            self.app.iconify()
+            threading.Thread(target=self._run_flow_engine, args=(start_node_id, generation), daemon=True).start()
         except Exception as e:
             with self.thread_lock:
                 self.running = False
@@ -656,7 +659,7 @@ class AutomationCore:
     
     def _get_next_links(self, node_id, port_name='out'): return [l['target'] for l in self.project['links'] if l.get('source') == node_id and l.get('source_port', 'out') == port_name and l.get('target') in self.project['nodes']]
     
-    def _run_flow_engine(self, start_node_id=None):
+    def _run_flow_engine(self, start_node_id=None, generation=None):
         try:
             start_nodes = [start_node_id] if start_node_id else [nid for nid, n in self.project['nodes'].items() if n['type'] == 'start']
             if not start_nodes: self.log("未找到开始节点", "error"); return
@@ -687,14 +690,30 @@ class AutomationCore:
                 if active_threads <= 0:
                     break
                 time.sleep(0.05)
-            self.running = False
-            if self.performance_stats['start_time']:
-                elapsed = time.time() - self.performance_stats['start_time']
-                self.log(f"📊 执行统计: {self.performance_stats['nodes_executed']}个节点, {self.performance_stats['errors']}个错误, 耗时{elapsed:.2f}秒", "info")
-            self.log("🏁 流程结束", "info"); 
-            self.app.highlight_node_safe(None); 
-            self.app.after(0, self.app.deiconify); 
-            self.app.after(100, self.app.reset_ui_state)
+            with self.thread_lock:
+                if generation is None:
+                    generation = self.run_generation
+                current_run = generation == self.run_generation
+                stats = self._stats_snapshot() if current_run else None
+                if current_run:
+                    self.running = False
+            if stats is not None:
+                if stats['start_time']:
+                    elapsed = time.time() - stats['start_time']
+                    self.log(f"📊 执行统计: {stats['nodes_executed']}个节点, {stats['errors']}个错误, 耗时{elapsed:.2f}秒", "info")
+                self.log("🏁 流程结束", "info")
+                self.app.after(0, lambda: self._finish_run_ui(generation, reset=False))
+                self.app.after(100, lambda: self._finish_run_ui(generation, reset=True))
+
+    def _finish_run_ui(self, generation, reset=False):
+        with self.thread_lock:
+            if generation != self.run_generation or self.running:
+                return
+        if reset:
+            self.app.reset_ui_state()
+        else:
+            self.app.highlight_node_safe(None)
+            self.app.deiconify()
 
     def _fork_node(self, node_id):
         with self.thread_lock:
@@ -719,11 +738,11 @@ class AutomationCore:
             self.app.highlight_node_safe(node_id, 'running'); self.app.select_node_safe(node_id)
             try: 
                 out_port = self._execute_node(node)
-                self.performance_stats['nodes_executed'] += 1
+                self._increment_stat('nodes_executed')
             except Exception as e: 
                 self.log(f"💥 节点[{node_id}]错误: {e}", "error"); 
                 traceback.print_exc(); 
-                self.performance_stats['errors'] += 1
+                self._increment_stat('errors')
                 out_port = 'fail'
             if out_port == '__STOP__' or self.stop_event.is_set(): return
             
@@ -755,15 +774,25 @@ class AutomationCore:
                         self.pause_event.set()
                     self.log(f"无法启动排队节点[{next_id}]，已停止剩余任务: {e}", "error")
 
+    def _memory_snapshot(self):
+        with self.memory_lock:
+            return dict(self.runtime_memory)
+
+    def _increment_stat(self, key):
+        with self.stats_lock:
+            self.performance_stats[key] += 1
+
+    def _stats_snapshot(self):
+        with self.stats_lock:
+            return dict(self.performance_stats)
+
     def _replace_variables(self, text):
         if not isinstance(text, str): return str(text)
-        try:
-            for k, v in self.runtime_memory.items(): 
-                val_str = str(v) if v is not None else ""
-                text = text.replace(f'${{{k}}}', val_str)
-                text = text.replace(f'${k}', val_str)
-                text = text.replace(f'{{{k}}}', val_str)
-        except Exception: pass
+        for k, v in self._memory_snapshot().items():
+            val_str = str(v) if v is not None else ""
+            text = text.replace(f'${{{k}}}', val_str)
+            text = text.replace(f'${k}', val_str)
+            text = text.replace(f'{{{k}}}', val_str)
         return text
     
     def _update_context_rect(self):
@@ -816,7 +845,8 @@ class AutomationCore:
             msg = data.get('msg', '执行到此节点')
             
             if "{ALL_VARS}" in msg.upper() or "{所有变量}" in msg or "${ALL_VARS}" in msg.upper() or "${所有变量}" in msg:
-                vars_list_str = "\n".join([f"• {k} = {v}" for k, v in self.runtime_memory.items()]) if self.runtime_memory else "（目前无任何内存变量）"
+                memory = self._memory_snapshot()
+                vars_list_str = "\n".join([f"• {k} = {v}" for k, v in memory.items()]) if memory else "（目前无任何内存变量）"
                 msg = msg.replace("${ALL_VARS}", vars_list_str).replace("${all_vars}", vars_list_str).replace("${所有变量}", vars_list_str).replace("{ALL_VARS}", vars_list_str).replace("{all_vars}", vars_list_str).replace("{所有变量}", vars_list_str)
                 
             use_sound = bool(data.get('use_sound', False))
@@ -867,15 +897,19 @@ class AutomationCore:
                 return 'fail'
 
         if ntype == 'set_var':
-            if 'batch_vars' in data: [self.runtime_memory.update({i['name']:i['value']}) for i in data['batch_vars'] if i.get('name')]
-            if data.get('var_name'): self.runtime_memory[data['var_name']] = data.get('var_value', '')
+            with self.memory_lock:
+                if 'batch_vars' in data:
+                    self.runtime_memory.update({i['name']: i['value'] for i in data['batch_vars'] if i.get('name')})
+                if data.get('var_name'):
+                    self.runtime_memory[data['var_name']] = data.get('var_value', '')
             return 'out'
 
         if ntype == 'clipboard':
             mode = data.get('clip_mode', 'read')
             if mode == 'read':
                 if HAS_PYPERCLIP:
-                    self.runtime_memory[data.get('var_name', 'clipboard_data')] = pyperclip.paste()
+                    with self.memory_lock:
+                        self.runtime_memory[data.get('var_name', 'clipboard_data')] = pyperclip.paste()
                 else:
                     self.log("⚠️ 未安装 pyperclip，无法读取剪贴板", "warning")
             elif mode == 'write':
@@ -886,10 +920,12 @@ class AutomationCore:
             return 'out'
 
         if ntype == 'var_switch':
-            val = str(self.runtime_memory.get(data.get('var_name',''), ''))
+            with self.memory_lock:
+                val = str(self.runtime_memory.get(data.get('var_name',''), ''))
             op, target = data.get('operator', '='), data.get('var_value', '')
             if data.get('var_name'): return 'yes' if ((val==target) if op=='=' else (val!=target)) else 'no'
-            vals = [str(self.runtime_memory.get(vn.strip(), '')) for vn in data.get('var_list', '').split(',') if vn.strip()]
+            with self.memory_lock:
+                vals = [str(self.runtime_memory.get(vn.strip(), '')) for vn in data.get('var_list', '').split(',') if vn.strip()]
             for case in data.get('cases', []):
                 if all(v == case.get('value', '') for v in vals): return case.get('id', 'else')
             return 'else'
@@ -1102,11 +1138,11 @@ class AutomationCore:
         if ntype == 'web': webbrowser.open(data.get('url')); self._smart_wait(2); return 'out'
         if ntype == 'loop':
             if data.get('infinite', True): return 'loop'
-            with self.io_lock:
+            with self.memory_lock:
                 k = f"loop_{node['id']}"; c = self.runtime_memory.get(k, 0)
                 if c < safe_int(data.get('count', 3)): self.runtime_memory[k] = c + 1; return 'loop'
-                else: 
-                    if k in self.runtime_memory: del self.runtime_memory[k]
+                else:
+                    self.runtime_memory.pop(k, None)
                     return 'exit'
         if ntype == 'if_img':
             self._ensure_window_focus()
