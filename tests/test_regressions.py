@@ -133,11 +133,9 @@ class RegressionTests(unittest.TestCase):
         engine.app = App()
 
         from unittest.mock import patch
+        real_thread = threading.Thread
+        threads = [real_thread(target=engine.start) for _ in range(8)]
         with patch("threading.Thread", FakeThread):
-            threads = [
-                threading.Thread(target=engine.start)
-                for _ in range(8)
-            ]
             for thread in threads:
                 thread.start()
             for thread in threads:
