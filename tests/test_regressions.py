@@ -75,6 +75,10 @@ class RegressionTests(unittest.TestCase):
             "AutomationCore", "_memory_snapshot",
             {"threading": threading}
         )
+        cls.IncrementStatProbe = extract_class_with_method(
+            "AutomationCore", "_increment_stat",
+            {"threading": threading}
+        )
         cls.FinishUiProbe = extract_class_with_method(
             "AutomationCore", "_finish_run_ui",
             {"threading": threading}
@@ -199,6 +203,30 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(engine.stop_event.is_set())
         self.assertTrue(engine.pause_event.is_set())
         self.assertEqual(engine.pending_nodes, [])
+
+    def test_parallel_stat_updates_do_not_lose_counts(self):
+        import threading
+
+        core = self.IncrementStatProbe()
+        core.stats_lock = threading.Lock()
+        core.performance_stats = {"nodes_executed": 0}
+        workers = 8
+        increments = 5000
+        threads = [
+            threading.Thread(
+                target=lambda: [
+                    core._increment_stat("nodes_executed")
+                    for _ in range(increments)
+                ]
+            )
+            for _ in range(workers)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(core.performance_stats["nodes_executed"], workers * increments)
 
     def test_stale_run_cannot_reset_new_run_ui(self):
         import threading
