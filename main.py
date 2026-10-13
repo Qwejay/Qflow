@@ -1590,7 +1590,10 @@ class FlowEditor(tk.Canvas):
         breakpoints = [nid for nid, n in self.nodes.items() if n.has_breakpoint]
         return {'nodes':nodes_d, 'links':self.links, 'breakpoints': breakpoints, 'metadata':{'dev_scale_x':SCALE_X,'dev_scale_y':SCALE_Y}}
 
-    def load_data(self, data):
+    def load_data(self, data, _rollback=False):
+        snapshot = None
+        mutation_started = False
+        previous_node_number = GraphNode.next_node_number
         try:
             if not isinstance(data, dict) or not isinstance(data.get('nodes'), dict) or not isinstance(data.get('links', []), list):
                 raise ValueError("项目格式无效：nodes 必须是对象，links 必须是列表")
@@ -1645,6 +1648,9 @@ class FlowEditor(tk.Canvas):
                 normalized_link.setdefault('id', str(uuid.uuid4()))
                 normalized_link.setdefault('source_port', 'out')
                 links.append(normalized_link)
+            if not _rollback:
+                snapshot = self.get_data()
+            mutation_started = True
             self.app.core.load_project(data)
             self.delete("all"); self.nodes.clear(); self.links.clear()
             breakpoints = set(data.get('breakpoints', []))
@@ -1668,6 +1674,12 @@ class FlowEditor(tk.Canvas):
             self.full_redraw()
             return True
         except Exception as e:
+            if mutation_started and snapshot is not None and not _rollback:
+                try:
+                    self.load_data(snapshot, _rollback=True)
+                    GraphNode.next_node_number = previous_node_number
+                except Exception as rollback_error:
+                    self.app.log(f"❌ 项目回滚失败: {rollback_error}", "error")
             self.app.log(f"❌ 加载失败: {e}", "error")
             return False
 
