@@ -558,7 +558,7 @@ class LogPanel(tk.Frame):
 class AutomationCore:
     def __init__(self, log_callback, app_instance):
         self.running = False; self.paused = False; self.stop_event = threading.Event(); self.pause_event = threading.Event()
-        self.log = log_callback; self.app = app_instance; self.project = None; self.runtime_memory = {}; self.memory_lock = threading.RLock(); self.io_lock = threading.Lock(); self.run_generation = 0
+        self.log = log_callback; self.app = app_instance; self.project = None; self.runtime_memory = {}; self.memory_lock = threading.RLock(); self.stats_lock = threading.Lock(); self.io_lock = threading.Lock(); self.run_generation = 0
         self.active_threads = 0; self.thread_lock = threading.Lock(); self.scaling_ratio = 1.0; self.breakpoints = set()
         self.max_threads = 50
         self.pending_nodes = []
@@ -694,7 +694,7 @@ class AutomationCore:
                 if generation is None:
                     generation = self.run_generation
                 current_run = generation == self.run_generation
-                stats = dict(self.performance_stats) if current_run else None
+                stats = self._stats_snapshot() if current_run else None
                 if current_run:
                     self.running = False
             if stats is not None:
@@ -738,11 +738,11 @@ class AutomationCore:
             self.app.highlight_node_safe(node_id, 'running'); self.app.select_node_safe(node_id)
             try: 
                 out_port = self._execute_node(node)
-                self.performance_stats['nodes_executed'] += 1
+                self._increment_stat('nodes_executed')
             except Exception as e: 
                 self.log(f"💥 节点[{node_id}]错误: {e}", "error"); 
                 traceback.print_exc(); 
-                self.performance_stats['errors'] += 1
+                self._increment_stat('errors')
                 out_port = 'fail'
             if out_port == '__STOP__' or self.stop_event.is_set(): return
             
@@ -777,6 +777,14 @@ class AutomationCore:
     def _memory_snapshot(self):
         with self.memory_lock:
             return dict(self.runtime_memory)
+
+    def _increment_stat(self, key):
+        with self.stats_lock:
+            self.performance_stats[key] += 1
+
+    def _stats_snapshot(self):
+        with self.stats_lock:
+            return dict(self.performance_stats)
 
     def _replace_variables(self, text):
         if not isinstance(text, str): return str(text)
