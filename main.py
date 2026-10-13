@@ -2862,16 +2862,33 @@ class App(tk.Tk):
         ExportWizardDialog(self, self, self.editor.get_data())
 
     def refresh_hotkeys(self):
-        if self.hotkey_listener: self.hotkey_listener.stop()
+        self.stop_hotkeys()
+        mapping = {}
+        for key, callback in (
+            (SETTINGS.get('hotkey_start'), self.on_hotkey_start),
+            (SETTINGS.get('hotkey_stop'), self.on_hotkey_stop),
+            (SETTINGS.get('hotkey_quit'), self.on_hotkey_quit),
+        ):
+            if not key:
+                continue
+            if key in mapping:
+                self.log(f"快捷键冲突：{key} 被多个操作使用，快捷键未启用", "error")
+                return
+            mapping[key] = callback
         try:
-            mapping = {SETTINGS['hotkey_start']: self.on_hotkey_start, SETTINGS['hotkey_stop']: self.on_hotkey_stop}
-            if SETTINGS.get('hotkey_quit'): mapping[SETTINGS['hotkey_quit']] = self.on_hotkey_quit
             self.hotkey_listener = keyboard.GlobalHotKeys(mapping)
             self.hotkey_listener.start()
-        except Exception: pass
-        
+        except Exception as e:
+            self.hotkey_listener = None
+            self.log(f"全局快捷键启动失败: {e}", "error")
+
     def stop_hotkeys(self):
-        if self.hotkey_listener: self.hotkey_listener.stop(); self.hotkey_listener = None
+        listener, self.hotkey_listener = self.hotkey_listener, None
+        if listener:
+            try:
+                listener.stop()
+            except Exception as e:
+                self.log(f"停止全局快捷键监听失败: {e}", "warning")
         
     def on_hotkey_start(self):
         self.after(0, self._safe_hotkey_start)
