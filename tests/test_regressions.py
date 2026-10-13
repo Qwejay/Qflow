@@ -119,10 +119,8 @@ class RegressionTests(unittest.TestCase):
             def reset_ui_state(self):
                 pass
 
-        class Engine:
-            log = lambda *args: None
-
-        engine = Engine()
+        engine = self.StartProbe()
+        engine.log = lambda *args: None
         engine.thread_lock = threading.Lock()
         engine.running = False
         engine.project = {"nodes": {"start": {"type": "start"}}}
@@ -189,6 +187,7 @@ class RegressionTests(unittest.TestCase):
         engine.max_threads = 2
         engine.active_threads = 0
         engine.pending_nodes = []
+        engine._process_node_thread = lambda node_id: None
 
         with patch("threading.Thread", BrokenThread):
             with self.assertRaisesRegex(RuntimeError, "thread start failed"):
