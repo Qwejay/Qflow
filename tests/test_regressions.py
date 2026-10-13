@@ -162,6 +162,8 @@ class RegressionTests(unittest.TestCase):
                 self.value = False
             def set(self):
                 self.value = True
+            def is_set(self):
+                return self.value
 
         class App:
             def iconify(self):
