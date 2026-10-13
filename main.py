@@ -648,8 +648,24 @@ class AutomationCore:
                 # Stop requests prevent new work, but existing workers must exit
                 # before the UI reports completion or permits another run.
                 time.sleep(0.05)
-        except Exception as e: traceback.print_exc(); self.log(f"引擎异常: {str(e)}", "error")
+        except Exception as e:
+            self.stop_event.set()
+            self.pause_event.set()
+            with self.thread_lock:
+                self.pending_nodes.clear()
+            traceback.print_exc()
+            self.log(f"引擎异常: {str(e)}", "error")
         finally:
+            # Never advertise completion while a worker can still touch shared
+            # runtime state; this also covers exceptions during engine startup.
+            with self.thread_lock:
+                self.pending_nodes.clear()
+            while True:
+                with self.thread_lock:
+                    active_threads = self.active_threads
+                if active_threads <= 0:
+                    break
+                time.sleep(0.05)
             self.running = False
             if self.performance_stats['start_time']:
                 elapsed = time.time() - self.performance_stats['start_time']
@@ -2538,7 +2554,9 @@ class App(tk.Tk):
     def _load_initial_file(self, auto_run):
         try:
             with open(self.current_file_path, 'r', encoding='utf-8-sig') as fp:
-                self.editor.load_data(json.load(fp))
+                project_data = json.load(fp)
+            if not self.editor.load_data(project_data):
+                raise ValueError("项目结构校验失败，已取消加载")
             self.update_title()
             self.log(f"📂 已加载项目: {self.current_file_path}", "success")
             if auto_run:
@@ -2574,7 +2592,7 @@ class App(tk.Tk):
                         VisualTips.show_toast(f"🟢 程序已在后台待命，请按 {hk_start} 开始执行", duration=2500, position='bottom_right')
         except Exception as e:
             self.log(f"❌ 加载文件失败: {e}", "error")
-            if getattr(self, '_hidden_run_mode', False):
+            if getattr(self, '_hidden_run_mode', False) or getattr(self, '_auto_run_mode', False):
                 self.quit_app()
 
     def setup_tray(self):
