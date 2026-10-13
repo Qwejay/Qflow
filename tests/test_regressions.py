@@ -181,6 +181,7 @@ class RegressionTests(unittest.TestCase):
         engine.thread_lock = threading.Lock()
         engine.memory_lock = threading.RLock()
         engine.running = False
+        engine.run_generation = 0
         engine.project = {"nodes": {"start": {"type": "start"}}}
         engine.paused = False
         engine.stop_event = Event()
