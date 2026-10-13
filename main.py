@@ -616,7 +616,7 @@ class AutomationCore:
             if not self.paused: self.log(f"🔴 命中断点: {node_id}", "paused"); self.pause(); self.app.after(0, self.app.deiconify)
         if not self.pause_event.is_set(): self.pause_event.wait()
     
-    def _get_next_links(self, node_id, port_name='out'): return [l['target'] for l in self.project['links'] if l['source'] == node_id and l.get('source_port') == port_name]
+    def _get_next_links(self, node_id, port_name='out'): return [l['target'] for l in self.project['links'] if l.get('source') == node_id and l.get('source_port', 'out') == port_name and l.get('target') in self.project['nodes']]
     
     def _run_flow_engine(self, start_node_id=None):
         try:
@@ -1051,10 +1051,11 @@ class HistoryManager:
         if self.undo_stack:
             last = json.dumps(self.undo_stack[-1], sort_keys=True)
             curr = json.dumps(state, sort_keys=True)
-            if last == curr: return
+            if last == curr: return False
         self.undo_stack.append(state)
         self.redo_stack.clear()
         if len(self.undo_stack) > self.max_history: self.undo_stack.pop(0)
+        return True
 
     def undo(self, event=None):
         if not self.undo_stack: return
@@ -1351,7 +1352,8 @@ class FlowEditor(tk.Canvas):
                 if clicked_node.id not in self.selected_node_ids: self.select_node(clicked_node.id)
             else: self.select_node(clicked_node.id, add=True)
             self.drag_data = {"type": "node", "last_vx": vx, "last_vy": vy, "dragged": False}
-            self.history.save_state(); [self.tag_raise(f"node_{nid}") for nid in self.selected_node_ids]
+            self.drag_data["history_saved"] = self.history.save_state() is not False
+            [self.tag_raise(f"node_{nid}") for nid in self.selected_node_ids]
         else:
             if not (event.state & 0x0004): self.select_node(None)
             self.drag_data = {"type": "box_select", "start_vx": vx, "start_vy": vy}; self.selection_box = self.create_rectangle(vx, vy, vx, vy, outline=COLORS['select_box'], width=2, dash=(4,4), tags="selection_box")
@@ -1378,8 +1380,8 @@ class FlowEditor(tk.Canvas):
                 for nid in self.selected_node_ids:
                     if nid in self.nodes: self.nodes[nid].set_pos(round(self.nodes[nid].x/GRID_SIZE)*GRID_SIZE, round(self.nodes[nid].y/GRID_SIZE)*GRID_SIZE)
                 self.redraw_links()
-            else: 
-                if self.history.undo_stack: self.history.undo_stack.pop()
+            elif self.drag_data.get("history_saved"):
+                self.history.undo_stack.pop()
         elif self.drag_data.get("type")=="box_select":
             if self.selection_box:
                 coords = self.coords(self.selection_box)
@@ -1508,14 +1510,32 @@ class FlowEditor(tk.Canvas):
         return {'nodes':nodes_d, 'links':self.links, 'breakpoints': breakpoints, 'metadata':{'dev_scale_x':SCALE_X,'dev_scale_y':SCALE_Y}}
 
     def load_data(self,data):
-        self.delete("all");self.nodes.clear();self.links.clear()
         try:
+            if not isinstance(data, dict) or not isinstance(data.get('nodes'), dict) or not isinstance(data.get('links', []), list):
+                raise ValueError("项目格式无效：nodes 必须是对象，links 必须是列表")
+            node_ids = set(data['nodes'])
+            for nid, node_data in data['nodes'].items():
+                if not isinstance(node_data, dict) or node_data.get('type') not in NODE_CONFIG:
+                    raise ValueError(f"节点 {nid} 的类型无效")
+                if not isinstance(node_data.get('data', {}), dict):
+                    raise ValueError(f"节点 {nid} 的 data 必须是对象")
+                for coordinate in ('x', 'y'):
+                    try:
+                        value = float(node_data[coordinate])
+                    except (KeyError, TypeError, ValueError):
+                        raise ValueError(f"节点 {nid} 的坐标 {coordinate} 无效")
+                    if not math.isfinite(value):
+                        raise ValueError(f"节点 {nid} 的坐标 {coordinate} 必须是有限数值")
+            for link in data.get('links', []):
+                if not isinstance(link, dict) or link.get('source') not in node_ids or link.get('target') not in node_ids:
+                    raise ValueError("项目包含无效连线：源节点或目标节点不存在")
             self.app.core.load_project(data)
+            self.delete("all"); self.nodes.clear(); self.links.clear()
             breakpoints = set(data.get('breakpoints', []))
             
             max_node_number = 0
             for n_data in data.get('nodes',{}).values():
-                node_number = n_data.get('data', {}).get('node_number', 0)
+                node_number = safe_int(n_data.get('data', {}).get('node_number', 0), 0)
                 if node_number > max_node_number:
                     max_node_number = node_number
             GraphNode.next_node_number = max_node_number + 1
