@@ -1676,7 +1676,8 @@ class FlowEditor(tk.Canvas):
         except Exception as e:
             if mutation_started and snapshot is not None and not _rollback:
                 try:
-                    self.load_data(snapshot, _rollback=True)
+                    if not self.load_data(snapshot, _rollback=True):
+                        raise RuntimeError("无法重新构建原项目")
                     GraphNode.next_node_number = previous_node_number
                 except Exception as rollback_error:
                     self.app.log(f"❌ 项目回滚失败: {rollback_error}", "error")
