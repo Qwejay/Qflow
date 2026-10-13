@@ -892,6 +892,7 @@ class AutomationCore:
             found = False
             while time.time() - start_t < timeout:
                 if self.stop_event.is_set(): return '__STOP__'
+                self._check_pause()
                 peak = AudioEngine.get_max_audio_peak()
                 if mode == 'has_sound':
                     if peak > threshold: found = True; break
