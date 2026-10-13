@@ -684,8 +684,16 @@ class AutomationCore:
                 self.active_threads -= 1
                 if self.pending_nodes and not self.stop_event.is_set():
                     next_id = self.pending_nodes.pop(0)
+                    # Reserve the worker slot before releasing the lock so the
+                    # engine cannot observe zero workers and finish prematurely.
+                    self.active_threads += 1
             if next_id is not None:
-                self._fork_node(next_id)
+                try:
+                    threading.Thread(target=self._process_node_thread, args=(next_id,), daemon=True).start()
+                except Exception as e:
+                    with self.thread_lock:
+                        self.active_threads -= 1
+                    self.log(f"无法启动排队节点[{next_id}]: {e}", "error")
 
     def _replace_variables(self, text):
         if not isinstance(text, str): return str(text)
@@ -1566,7 +1574,10 @@ class FlowEditor(tk.Canvas):
                 if n_data.get('breakpoint', False) or nid in breakpoints: n.has_breakpoint = True; n.draw()
             self.links=data.get('links',[])
             self.full_redraw()
-        except Exception as e: self.app.log(f"❌ 加载失败: {e}", "error")
+            return True
+        except Exception as e:
+            self.app.log(f"❌ 加载失败: {e}", "error")
+            return False
 
 class PropertyPanel(tk.Frame):
     def __init__(self, parent, app):
@@ -2888,28 +2899,42 @@ class App(tk.Tk):
     def save(self):
         if self.current_file_path:
             try:
-                with open(self.current_file_path, 'w', encoding='utf-8') as fp:
-                    json.dump(self.editor.get_data(), fp, ensure_ascii=False, indent=2)
-                self.log(f"💾 已保存到: {self.current_file_path}", "success")
+                target_path = self.current_file_path
+                temp_path = target_path + ".tmp"
+                try:
+                    with open(temp_path, 'w', encoding='utf-8') as fp:
+                        json.dump(self.editor.get_data(), fp, ensure_ascii=False, indent=2)
+                    os.replace(temp_path, target_path)
+                finally:
+                    if os.path.exists(temp_path): os.remove(temp_path)
+                self.log(f"💾 已保存到: {target_path}", "success")
                 self.update_title()
+                return True
             except Exception as e:
                 self.log(f"❌ 保存失败: {e}", "error")
+                return False
         else:
-            self.save_as()
-            
+            return self.save_as()
+
     def save_as(self):
-        if (f:=filedialog.asksaveasfilename(defaultextension=".qflow", filetypes=[("Qflow", "*.qflow"), ("All", "*.*")])):
-            previous_path = self.current_file_path
-            self.current_file_path = f
-            self.save()
-            if not os.path.isfile(f):
-                self.current_file_path = previous_path
+        f = filedialog.asksaveasfilename(defaultextension=".qflow", filetypes=[("Qflow", "*.qflow"), ("All", "*.*")])
+        if not f:
+            return False
+        previous_path = self.current_file_path
+        self.current_file_path = f
+        if not self.save():
+            self.current_file_path = previous_path
+            self.update_title()
+            return False
+        return True
             
     def load(self):
         if (f:=filedialog.askopenfilename(filetypes=[("Qflow", "*.qflow"), ("All", "*.*")])): 
             try:
-                with open(f, 'r', encoding='utf-8-sig') as fp: 
-                    self.editor.load_data(json.load(fp))
+                with open(f, 'r', encoding='utf-8-sig') as fp:
+                    project_data = json.load(fp)
+                if not self.editor.load_data(project_data):
+                    return
                 self.current_file_path = f
                 self.update_title()
                 self.log(f"📂 已加载: {f}", "success")
