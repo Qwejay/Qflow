@@ -1,0 +1,21 @@
+name: Python regression tests
+
+on:
+  push:
+    branches: [main, "ponytail/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile application source
+        run: python -m py_compile main.py
+      - name: Run platform-independent regression tests
+        run: python -m unittest discover -s tests -v
