@@ -1608,7 +1608,7 @@ class HistoryManager:
         if self.editor.load_data(self.undo_stack[-1]):
             self.undo_stack.pop()
             self.redo_stack.append(current)
-            self.editor.app.property_panel.clear()
+            self.editor.app.property_panel.show_empty()
             if hasattr(self.editor.app, 'mark_dirty'):
                 self.editor.app.mark_dirty(True)
 
@@ -1619,7 +1619,7 @@ class HistoryManager:
         if self.editor.load_data(self.redo_stack[-1]):
             self.redo_stack.pop()
             self.undo_stack.append(current)
-            self.editor.app.property_panel.clear()
+            self.editor.app.property_panel.show_empty()
             if hasattr(self.editor.app, 'mark_dirty'):
                 self.editor.app.mark_dirty(True)
 
@@ -2514,13 +2514,14 @@ class FlowEditor(tk.Canvas):
             tags = self.gettags(item)
             if (nid := next((t[5:] for t in tags if t.startswith("node_")), None)) and nid in self.nodes:
                 if "port_out" in tags and self.nodes[nid].type != 'reroute':
+                    port_name = next((t for t in tags if t in self.nodes[nid].outputs), 'out')
                     self.history.save_state()
-                    self.links = [l for l in self.links if not (l.get('source') == nid and l.get('source_port', 'out')==next((t for t in tags if t in self.nodes[nid].outputs), 'out'))]
+                    self.links = [l for l in self.links if not (l.get('source') == nid and l.get('source_port', 'out') == port_name)]
                     self.redraw_links()
                     return
                 if "port_in" in tags and self.nodes[nid].type != 'reroute':
                     self.history.save_state()
-                    self.links = [l for l in self.links if not l['target'] == nid]
+                    self.links = [l for l in self.links if l.get('target') != nid]
                     self.redraw_links()
                     return
         lx, ly = self.get_logical_pos(event.x, event.y)
