@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '手动构建版本号 (例如: 1.7.0)'
+        description: '发布版本号（例如：3.0.0 或 3.0.1-beta）'
         required: true
-        default: '1.7.0'
+        default: '3.0.0'
 
 jobs:
   build-and-release:
@@ -35,68 +35,98 @@ jobs:
           pip install -r requirements.txt
           pip install nuitka ordered-set zstandard
 
-      - name: Resolve Version
+      - name: Resolve Version and Release Tag
         id: version
         shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            ORIGINAL_VER="${{ github.ref_name }}"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            ORIGINAL_VER="${{ github.event.inputs.version }}"
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            RELEASE_TAG="$REF_NAME"
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            RELEASE_TAG="$INPUT_VERSION"
+            if [[ ! "$RELEASE_TAG" =~ ^[vV] ]]; then
+              RELEASE_TAG="v$RELEASE_TAG"
+            fi
           else
-            ORIGINAL_VER="1.7.0-dev"
+            echo "Unsupported trigger for release." >&2
+            exit 1
           fi
-          
-          CLEAN_VER=$(echo "$ORIGINAL_VER" | sed -E 's/^[vV]//g')
-          
-          METADATA_VER=$(echo "$CLEAN_VER" | cut -d'-' -f1)
-          if [[ ! "$METADATA_VER" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
-            METADATA_VER="1.7.0"
+
+          CLEAN_VER="${RELEASE_TAG#v}"
+          CLEAN_VER="${CLEAN_VER#V}"
+
+          # 接受 x.y、x.y.z、x.y.z.w，以及可选的预发布/构建标识。
+          if [[ ! "$CLEAN_VER" =~ ^[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version: $CLEAN_VER" >&2
+            exit 1
           fi
-          
-          echo "clean_version=$CLEAN_VER" >> $GITHUB_OUTPUT
-          echo "metadata_version=$METADATA_VER" >> $GITHUB_OUTPUT
+
+          METADATA_VER="${CLEAN_VER%%-*}"
+          METADATA_VER="${METADATA_VER%%+*}"
+          IS_PRERELEASE=false
+          [[ "$CLEAN_VER" == *-* ]] && IS_PRERELEASE=true
+
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "clean_version=$CLEAN_VER" >> "$GITHUB_OUTPUT"
+          echo "metadata_version=$METADATA_VER" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
+          echo "Release tag: $RELEASE_TAG"
+          echo "Application version: $CLEAN_VER"
+          echo "Windows metadata version: $METADATA_VER"
+          echo "Prerelease: $IS_PRERELEASE"
 
       - name: Sync Version to Code
         shell: python
+        env:
+          QFLOW_VERSION: ${{ steps.version.outputs.clean_version }}
         run: |
-          import re
           import os
+          import re
 
-          version = "${{ steps.version.outputs.clean_version }}"
-          print(f"Target version to sync: {version}")
+          version = os.environ["QFLOW_VERSION"]
+          candidates = [name for name in ("Qflow.py", "main.py") if os.path.isfile(name)]
+          if not candidates:
+              raise SystemExit("未找到 Qflow.py 或 main.py，无法同步版本号。")
 
-          # 自动检测 Qflow.py 或 main.py 并在代码中更新 __version__ 变量
-          for filename in ["Qflow.py", "main.py"]:
-              if os.path.exists(filename):
-                  with open(filename, 'r', encoding='utf-8') as f:
-                      content = f.read()
-                  
-                  if "__version__" in content:
-                      new_content = re.sub(
-                          r'(__version__\s*=\s*["\'])[^"\']+(["\'])',
-                          f'\\g<1>{version}\\g<2>',
-                          content,
-                          count=1
-                      )
-                      with open(filename, 'w', encoding='utf-8') as f:
-                          f.write(new_content)
-                      print(f"Successfully synchronized version in {filename}.")
+          for filename in candidates:
+              with open(filename, "r", encoding="utf-8") as file:
+                  content = file.read()
+
+              updated, count = re.subn(
+                  r'(__version__\s*=\s*["\'])[^"\']+(["\'])',
+                  lambda match: match.group(1) + version + match.group(2),
+                  content,
+                  count=1,
+              )
+              if count:
+                  with open(filename, "w", encoding="utf-8", newline="") as file:
+                      file.write(updated)
+                  print(f"已同步 {filename}: {version}")
 
       - name: Build with Nuitka
+        shell: pwsh
+        env:
+          QFLOW_VERSION: ${{ steps.version.outputs.clean_version }}
+          METADATA_VERSION: ${{ steps.version.outputs.metadata_version }}
         run: |
-          $version = "${{ steps.version.outputs.clean_version }}"
-          $metadataVersion = "${{ steps.version.outputs.metadata_version }}"
-          
-          # 根据当前文件结构自适应选择入口点和期望的输出文件
+          $version = $env:QFLOW_VERSION
+          $metadataVersion = $env:METADATA_VERSION
+
           if (Test-Path "Qflow.py") {
               $entryPoint = "Qflow.py"
               $expectedExe = "dist/Qflow.exe"
-          } else {
+          } elseif (Test-Path "main.py") {
               $entryPoint = "main.py"
               $expectedExe = "dist/main.exe"
+          } else {
+              throw "未找到入口文件 Qflow.py 或 main.py。"
           }
-          
+
           $nuitkaParams = @(
             "-m", "nuitka",
             "--standalone",
@@ -114,67 +144,67 @@ jobs:
             "--noinclude-setuptools-mode=nofollow",
             "--assume-yes-for-downloads"
           )
-          
-          $pipList = pip list
-          if ($pipList -match "PyQt5") { $nuitkaParams += "--enable-plugin=pyqt5" }
-          if ($pipList -match "PyQt6") { $nuitkaParams += "--enable-plugin=pyqt6" }
-          if ($pipList -match "PySide6") { $nuitkaParams += "--enable-plugin=pyside6" }
-          
+
           if (Test-Path "icon.ico") {
             $nuitkaParams += "--windows-icon-from-ico=icon.ico"
             $nuitkaParams += "--include-data-files=icon.ico=icon.ico"
           }
-          
+
           $nuitkaParams += $entryPoint
-          
           python @nuitkaParams
-          
-          if (Test-Path $expectedExe) {
-            # 重命名为带版本号的 exe 文件
-            Rename-Item -Path $expectedExe -NewName "Qflow_$version.exe"
-            Write-Host "成功生成：dist/Qflow_$version.exe"
-            
-            # 将生成的 exe 压缩为 zip
-            Compress-Archive -Path "dist/Qflow_$version.exe" -DestinationPath "dist/Qflow_$version.zip"
-            Write-Host "成功生成：dist/Qflow_$version.zip"
-          } else {
-            Write-Error "编译失败：未能在 dist 目录下找到生成的 $expectedExe 文件"
-            exit 1
+          if ($LASTEXITCODE -ne 0) {
+              throw "Nuitka 编译失败，退出代码：$LASTEXITCODE"
           }
-        shell: pwsh
+
+          if (-not (Test-Path $expectedExe)) {
+              throw "编译完成但未找到预期产物：$expectedExe"
+          }
+
+          $outputExe = "dist/Qflow_$version.exe"
+          $outputZip = "dist/Qflow_$version.zip"
+          if (Test-Path $outputExe) { Remove-Item $outputExe -Force }
+          if (Test-Path $outputZip) { Remove-Item $outputZip -Force }
+
+          Rename-Item -Path $expectedExe -NewName (Split-Path $outputExe -Leaf)
+          Compress-Archive -Path $outputExe -DestinationPath $outputZip -Force
+
+          if (-not (Test-Path $outputZip)) {
+              throw "ZIP 归档生成失败：$outputZip"
+          }
+          Write-Host "成功生成：$outputExe"
+          Write-Host "成功生成：$outputZip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Qflow-executable
+          name: Qflow-executable-${{ steps.version.outputs.clean_version }}
           path: dist/Qflow_*.zip
+          if-no-files-found: error
           retention-days: 5
 
       - name: Generate changelog
         id: changelog
+        shell: pwsh
         run: |
-          $latestCommit = git log -1 --pretty=format:"- %s (%h)"
+          $latestCommit = git log -1 --pretty=format:"- %s (%h)" $env:GITHUB_SHA
           "changelog<<EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           $latestCommit | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-        shell: pwsh
 
       - name: Create Release and Upload Asset
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ steps.version.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
           name: Qflow ${{ steps.version.outputs.clean_version }}
           body: |
             ## Latest Change
-            
+
             ${{ steps.changelog.outputs.changelog }}
-            
+
             ---
             *此版本由 GitHub Actions 自动构建生成。*
           draft: false
-          prerelease: false
-          files: |
-            dist/Qflow_*.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: ${{ steps.version.outputs.is_prerelease }}
+          files: dist/Qflow_*.zip
+          fail_on_unmatched_files: true
