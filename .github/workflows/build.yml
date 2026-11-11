@@ -91,8 +91,9 @@ jobs:
           version = os.environ["QFLOW_VERSION"]
           candidates = [name for name in ("Qflow.py", "main.py") if os.path.isfile(name)]
           if not candidates:
-              raise SystemExit("未找到 Qflow.py 或 main.py，无法同步版本号。")
+              raise SystemExit("ERROR: Qflow.py or main.py was not found.")
 
+          updated_files = []
           for filename in candidates:
               with open(filename, "r", encoding="utf-8") as file:
                   content = file.read()
@@ -106,7 +107,12 @@ jobs:
               if count:
                   with open(filename, "w", encoding="utf-8", newline="") as file:
                       file.write(updated)
-                  print(f"已同步 {filename}: {version}")
+                  updated_files.append(filename)
+                  # Keep console output ASCII-only for Windows runners using cp1252.
+                  print(f"Synced {filename}: {version}")
+
+          if not updated_files:
+              raise SystemExit("ERROR: No __version__ assignment was found in the entry-point files.")
 
       - name: Build with Nuitka
         shell: pwsh
