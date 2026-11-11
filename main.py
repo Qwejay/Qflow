@@ -1601,6 +1601,16 @@ class HistoryManager:
         self.editor.app.mark_dirty(True)
         return True
 
+    def _reset_property_panel(self):
+        panel = getattr(self.editor.app, 'property_panel', None)
+        show_empty = getattr(panel, 'show_empty', None)
+        if callable(show_empty):
+            show_empty()
+            return
+        clear = getattr(panel, 'clear', None)
+        if callable(clear):
+            clear()
+
     def undo(self, event=None):
         if not self.undo_stack:
             return
@@ -1608,7 +1618,7 @@ class HistoryManager:
         if self.editor.load_data(self.undo_stack[-1]):
             self.undo_stack.pop()
             self.redo_stack.append(current)
-            self.editor.app.property_panel.show_empty()
+            self._reset_property_panel()
             if hasattr(self.editor.app, 'mark_dirty'):
                 self.editor.app.mark_dirty(True)
 
@@ -1619,7 +1629,7 @@ class HistoryManager:
         if self.editor.load_data(self.redo_stack[-1]):
             self.redo_stack.pop()
             self.undo_stack.append(current)
-            self.editor.app.property_panel.show_empty()
+            self._reset_property_panel()
             if hasattr(self.editor.app, 'mark_dirty'):
                 self.editor.app.mark_dirty(True)
 
@@ -2514,9 +2524,16 @@ class FlowEditor(tk.Canvas):
             tags = self.gettags(item)
             if (nid := next((t[5:] for t in tags if t.startswith("node_")), None)) and nid in self.nodes:
                 if "port_out" in tags and self.nodes[nid].type != 'reroute':
-                    port_name = next((t for t in tags if t in self.nodes[nid].outputs), 'out')
                     self.history.save_state()
-                    self.links = [l for l in self.links if not (l.get('source') == nid and l.get('source_port', 'out') == port_name)]
+                    self.links = [
+                        l for l in self.links
+                        if not (
+                            l.get('source') == nid
+                            and l.get('source_port', 'out')==next(
+                                (t for t in tags if t in self.nodes[nid].outputs), 'out'
+                            )
+                        )
+                    ]
                     self.redraw_links()
                     return
                 if "port_in" in tags and self.nodes[nid].type != 'reroute':
